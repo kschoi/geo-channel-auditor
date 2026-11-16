@@ -16,7 +16,6 @@
     charCount: $('#char-count'),
     runBtn: $('#run-btn'),
     runLabel: $('#run-btn-label'),
-    runIcon: $('#run-btn-icon'),
     sampleList: $('#sample-list'),
     empty: $('#empty'),
     progress: $('#progress'),
@@ -37,6 +36,7 @@
   ];
 
   const CHANNEL_LABEL = { instagram: 'Instagram', naver_place: 'Naver Place', blog_faq: 'Blog FAQ' };
+  const SEVERITY_LABEL = { high: '심각', medium: '보통', low: '낮음' };
   const ENDPOINT_LABEL = {
     'search.web': 'Liner Search',
     'agents.search': 'Search Agent',
@@ -51,9 +51,9 @@
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-  const scoreColor = (score) => (score >= 70 ? '#059669' : score >= 50 ? '#d97706' : '#e11d48');
-  const scoreBar = (score) => (score >= 70 ? 'bar-emerald' : score >= 50 ? 'bar-amber' : 'bar-rose');
+  const scoreBar = (score) => (score >= 70 ? 'bar-good' : score >= 50 ? 'bar-mid' : 'bar-low');
   const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+  const fmtDate = (value) => String(value || '').replace('T', ' ').slice(0, 16);
 
   function channelTextOf(sample) {
     const labels = { instagram: '[Instagram]', naver_place: '[Naver Place]', blog: '[Blog]' };
@@ -89,8 +89,8 @@
   function setRunning(running) {
     state.running = running;
     els.runBtn.disabled = running;
-    els.runLabel.textContent = running ? '진단 중…' : '진단 시작';
-    els.runIcon.classList.toggle('animate-spin', running);
+    els.runBtn.classList.toggle('is-loading', running);
+    els.runLabel.textContent = running ? '진단 중' : '진단 시작';
     $$('.sample-btn', els.sampleList).forEach((btn) => { btn.disabled = running; });
   }
 
@@ -117,6 +117,12 @@
     els.progressMode.textContent = mode === 'live' ? 'LIVE LINER API' : 'DEMO MOCK MODE';
   }
 
+  function modeBadgeHtml(mode, degraded) {
+    return mode === 'live'
+      ? '<span class="badge badge-live">LIVE LINER API</span>'
+      : `<span class="badge badge-${degraded ? 'fallback' : 'demo'}">${degraded ? 'DEMO FALLBACK' : 'DEMO MOCK MODE'}</span>`;
+  }
+
   /* ------------------------------------------------------------------ */
   /* 진행 표시                                                          */
   /* ------------------------------------------------------------------ */
@@ -124,8 +130,8 @@
     els.stepList.innerHTML = STEP_DEFS.map((step, index) => `
       <li class="step" data-step="${index + 1}" data-status="pending">
         <span class="step-dot">${index + 1}</span>
-        <div class="min-w-0 flex-1">
-          <div class="flex items-baseline justify-between gap-2">
+        <div class="step-main">
+          <div class="step-row">
             <p class="step-title">${esc(step.title)}</p>
             <span class="step-time" data-role="time"></span>
           </div>
@@ -143,14 +149,9 @@
     const timeEl = $('[data-role="time"]', node);
     if (status === 'done') {
       timeEl.textContent = latency != null ? fmtMs(latency) : '';
-      const dot = $('.step-dot', node);
-      dot.textContent = '✓';
+      $('.step-dot', node).textContent = '✓';
     }
-    if (status === 'running') {
-      timeEl.textContent = '진행 중';
-      const title = $('.step-title', node);
-      if (!title.dataset.original) title.dataset.original = title.textContent;
-    }
+    if (status === 'running') timeEl.textContent = '진행 중';
   }
 
   /* ------------------------------------------------------------------ */
@@ -257,84 +258,61 @@
     setHeaderBadge(r.mode, r.degraded);
     state.tab = (r.contents?.[0]?.channel) || 'instagram';
 
-    const header = renderHeaderCard(r);
-    const warnings = renderWarnings(r);
-    const demand = renderDemand(r);
-    const gaps = renderGaps(r);
-    const contents = renderContents(r);
-    const sources = renderSources(r);
-    const pipeline = renderPipeline(r);
-
-    els.results.innerHTML = header + warnings + demand + gaps + contents + sources + pipeline;
+    els.results.innerHTML = [
+      renderHeaderCard(r),
+      renderWarnings(r),
+      renderDemand(r),
+      renderGaps(r),
+      renderContents(r),
+      renderSources(r),
+      renderPipeline(r),
+    ].join('');
     showPanel('results');
-    bindTabs(contents);
+    bindTabs();
     bindCopyButtons();
     animateBars();
   }
 
   function renderHeaderCard(r) {
-    const circumference = 2 * Math.PI * 50;
-    const offset = circumference * (1 - (r.overall_score || 0) / 100);
-    const color = scoreColor(r.overall_score || 0);
-    const modeBadge = r.mode === 'live'
-      ? '<span class="badge badge-live">LIVE LINER API</span>'
-      : `<span class="badge badge-${r.degraded ? 'fallback' : 'demo'}">${r.degraded ? 'DEMO FALLBACK' : 'DEMO MOCK MODE'}</span>`;
-
+    const score = r.overall_score || 0;
     const tiles = (r.scores || []).map((item) => `
       <div class="score-tile">
-        <div class="score-tile-top">
-          <span>${esc(item.label)}</span>
-          <b style="color:${scoreColor(item.score)}">${item.score}</b>
-        </div>
-        <div class="score-bar"><i class="${scoreBar(item.score)}" data-width="${item.score}%" style="width:0"></i></div>
+        <p class="score-tile-label">${esc(item.label)}</p>
+        <p class="score-tile-value">${item.score}</p>
+        <div class="score-bar"><i class="${scoreBar(item.score)}" data-width="${item.score}%"></i></div>
         <p class="score-comment">${esc(item.comment)}</p>
       </div>`).join('');
 
     return `
-    <section class="card p-5 sm:p-6 fade-up">
-      <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-1.5">
-            ${modeBadge}
-            <span class="badge badge-soft">${esc(r.input.industry)}</span>
-            <span class="badge badge-soft">${(r.sources || []).length}개 출처 대조</span>
+    <section class="card report fade-up">
+      <div class="report-top">
+        <div class="report-main">
+          <div class="meta">
+            ${modeBadgeHtml(r.mode, r.degraded)}
+            <span class="meta-item">${esc(r.input.industry)}</span>
+            <span class="meta-item">출처 ${(r.sources || []).length}건</span>
           </div>
-          <h2 class="mt-2.5 text-[19px] font-bold leading-snug tracking-tight text-slate-900">${esc(r.input.store_name)}</h2>
-          <p class="mt-1 text-[11.5px] text-slate-500">${esc(r.input.location)}</p>
-          <p class="mt-3 max-w-xl text-[12.5px] leading-relaxed text-slate-600">${esc(r.summary)}</p>
-          <p class="mt-2 text-[10.5px] text-slate-400">${esc((r.generated_at || '').replace('T', ' ').slice(0, 16))} 생성 · ${r.mode === 'live' ? '실시간 Liner API' : '가상 데이터 기반 데모'}</p>
+          <h2 class="report-title">${esc(r.input.store_name)}</h2>
+          <p class="report-loc">${esc(r.input.location)}</p>
+          <p class="report-summary">${esc(r.summary)}</p>
+          <p class="report-time">${esc(fmtDate(r.generated_at))} 기준 · ${r.mode === 'live' ? '실시간 Liner API' : '가상 데이터 기반 데모'}</p>
         </div>
-        <div class="flex shrink-0 items-center gap-4 sm:flex-col sm:items-center">
-          <div class="gauge-wrap">
-            <svg width="118" height="118" viewBox="0 0 118 118" class="-rotate-90" aria-hidden="true">
-              <circle cx="59" cy="59" r="50" fill="none" stroke="#eef2f7" stroke-width="9"></circle>
-              <circle cx="59" cy="59" r="50" fill="none" stroke="${color}" stroke-width="9" stroke-linecap="round"
-                stroke-dasharray="${circumference.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"></circle>
-            </svg>
-            <div class="gauge-value">
-              <b style="color:${color}">${r.overall_score}</b>
-              <span>CHANNEL SCORE</span>
-            </div>
-          </div>
+        <div class="score-block">
+          <p class="score-label">채널 점수</p>
+          <p class="score-value">${score}<span>/100</span></p>
+          <div class="score-bar lg"><i class="${scoreBar(score)}" data-width="${score}%"></i></div>
         </div>
       </div>
-      <div class="mt-5 grid grid-cols-2 gap-2 lg:grid-cols-4">${tiles}</div>
+      <div class="score-grid">${tiles}</div>
     </section>`;
   }
 
   function renderWarnings(r) {
     if (!r.warnings?.length) return '';
     return `
-      <div class="card card-warn p-4 fade-in">
-        <div class="flex gap-2.5">
-          <span class="text-[15px]">🔎</span>
-          <div>
-            <p class="text-[11.5px] font-semibold text-amber-900">참고</p>
-            <ul class="mt-1 space-y-1 text-[11px] leading-relaxed text-amber-800">
-              ${r.warnings.map((w) => `<li>· ${esc(w)}</li>`).join('')}
-            </ul>
-          </div>
-        </div>
+      <div class="note fade-in">
+        <p class="note-title">참고</p>
+        <ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
       </div>`;
   }
 
@@ -344,56 +322,64 @@
     const chips = (r.demand.references || []).map((ref) => `
       <a class="source-chip" href="${esc(ref.url)}" target="_blank" rel="noreferrer" title="${esc(ref.title)}">
         <img src="${esc(ref.faviconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
-        <span class="truncate max-w-[190px]">${esc(ref.hostname || ref.title)}</span>
+        <span class="truncate">${esc(ref.hostname || ref.title)}</span>
       </a>`).join('');
-    const queries = (r.queries || []).map((q) => `<span class="chip">🔍 ${esc(q)}</span>`).join('');
+    const queries = (r.queries || []).map((q) => `<span class="chip chip-mono">${esc(q)}</span>`).join('');
     return `
-      <section class="card p-5 fade-up">
-        <div class="section-head"><h3>상권 고객 수요 요약</h3><span class="hint">Liner Search Agent</span></div>
-        <div class="content-body">${esc(answer)}</div>
-        <div class="mt-3 flex flex-wrap gap-1.5">${queries}</div>
-        ${chips ? `<div class="mt-3 flex flex-wrap gap-1.5">${chips}</div>` : ''}
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">상권 고객 수요</h3>
+          <span class="section-hint">Liner Search Agent</span>
+        </div>
+        <p class="body-text">${esc(answer)}</p>
+        ${queries ? `<div class="chips">${queries}</div>` : ''}
+        ${chips ? `<div class="chips">${chips}</div>` : ''}
       </section>`;
   }
 
   function renderGaps(r) {
     const gaps = r.gaps || [];
     if (!gaps.length) return '';
-    const cards = gaps.map((gap, index) => `
-      <article class="gap-card">
-        <div class="flex items-start gap-3">
-          <span class="gap-index">${String(index + 1).padStart(2, '0')}</span>
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-1.5">
-              <h4 class="text-[13px] font-semibold text-slate-900">${esc(gap.title)}</h4>
-              <span class="sev sev-${esc(gap.severity)}">${esc((gap.severity || '').toUpperCase())}</span>
+    const cards = gaps.map((gap, index) => {
+      const severity = String(gap.severity || '').toLowerCase();
+      const severityLabel = SEVERITY_LABEL[severity] || severity.toUpperCase();
+      return `
+      <article class="card gap">
+        <div class="gap-head">
+          <span class="gap-num">${String(index + 1).padStart(2, '0')}</span>
+          <div class="gap-body">
+            <div class="gap-title-row">
+              <h4 class="gap-title">${esc(gap.title)}</h4>
+              <span class="sev sev-${esc(severity)}">${esc(severityLabel)}</span>
               ${gap.dimension_label ? `<span class="chip">${esc(gap.dimension_label)}</span>` : ''}
             </div>
-            <p class="mt-1.5 text-[11.5px] leading-relaxed text-slate-600">${esc(gap.reason)}</p>
+            <p class="gap-reason">${esc(gap.reason)}</p>
             ${gap.demand_evidence ? `
               <div class="evidence">
                 <b>상권 검색 수요 근거</b>${esc(gap.demand_evidence)}
               </div>` : ''}
             ${gap.sources?.length ? `
-              <div class="mt-2 flex flex-wrap gap-1.5">
+              <div class="chips">
                 ${gap.sources.map((src) => `
                   <a class="source-chip" href="${esc(src.url)}" target="_blank" rel="noreferrer" title="${esc(src.description || src.title)}">
                     <img src="${esc(src.faviconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
-                    <span class="truncate max-w-[210px]">${esc(src.title)}</span>
-                    ${src.demo ? '<span class="text-[8.5px] font-bold text-amber-600">DEMO</span>' : ''}
+                    <span class="truncate">${esc(src.title)}</span>
+                    ${src.demo ? '<span class="demo-flag">DEMO</span>' : ''}
                   </a>`).join('')}
               </div>` : ''}
-            ${gap.fix_hint ? `<p class="mt-2 text-[10.8px] text-slate-500"><b class="text-slate-700">처방</b> · ${esc(gap.fix_hint)}</p>` : ''}
+            ${gap.fix_hint ? `<p class="gap-fix"><b>처방</b> · ${esc(gap.fix_hint)}</p>` : ''}
           </div>
         </div>
-      </article>`).join('');
+      </article>`;
+    }).join('');
+
     return `
       <section class="fade-up">
         <div class="section-head">
-          <h3>3대 정보 결핍</h3>
-          <span class="hint">상권 검색 수요 대비 채널 누락 지점</span>
+          <h3 class="section-title">3대 정보 결핍</h3>
+          <span class="section-hint">상권 검색 수요 대비 채널 누락 지점</span>
         </div>
-        <div class="space-y-2.5">${cards}</div>
+        <div class="gap-list">${cards}</div>
       </section>`;
   }
 
@@ -403,36 +389,37 @@
     state.copyStore = contents.map((c) => c.body || '');
 
     const tabs = contents.map((c, index) => `
-      <button class="tab-btn" role="tab" data-tab="${esc(c.channel)}"
+      <button class="tab" role="tab" data-tab="${esc(c.channel)}"
         aria-selected="${index === 0 ? 'true' : 'false'}">${esc(CHANNEL_LABEL[c.channel] || c.channel)}</button>`).join('');
 
     const panels = contents.map((c, index) => `
       <div data-panel="${esc(c.channel)}" class="${index === 0 ? '' : 'hidden'}">
-        <div class="flex items-start justify-between gap-3">
+        <div class="panel-head-row">
           <div class="min-w-0">
-            <h4 class="text-[13.5px] font-semibold leading-snug text-slate-900">${esc(c.title)}</h4>
-            <p class="mt-1 text-[11.5px] leading-relaxed text-slate-500">${esc(c.summary)}</p>
+            <h4 class="content-title">${esc(c.title)}</h4>
+            <p class="content-summary">${esc(c.summary)}</p>
           </div>
-          <button class="copy-btn shrink-0" data-copy="${index}" type="button">
-            <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3.5A1.5 1.5 0 018.5 2h5A1.5 1.5 0 0115 3.5v9a1.5 1.5 0 01-1.5 1.5h-5A1.5 1.5 0 017 12.5v-9z"/><path d="M4 6.5A1.5 1.5 0 012.5 8v8.5A1.5 1.5 0 004 18h6a1.5 1.5 0 001.5-1.5V16h-3A3.5 3.5 0 015 12.5v-6z"/></svg>
+          <button class="copy-btn" data-copy="${index}" type="button">
+            <svg width="11" height="11" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <rect x="7" y="2.5" width="9.5" height="11" rx="1.6" stroke="currentColor" stroke-width="1.4" />
+              <path d="M13 16.5H4.9A1.4 1.4 0 0 1 3.5 15.1V7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
             복사
           </button>
         </div>
-        <div class="content-body-area mt-3"><div class="content-body">${esc(c.body)}</div></div>
-        ${c.hashtags?.length ? `<div class="mt-2 flex flex-wrap gap-1">${c.hashtags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
-        ${c.caution ? `
-          <div class="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[10.5px] leading-relaxed text-amber-800 ring-1 ring-inset ring-amber-200/70">
-            <b>주의</b> · ${esc(c.caution)}
-          </div>` : ''}
+        <div class="content-area"><div class="content-text">${esc(c.body)}</div></div>
+        ${c.hashtags?.length ? `<div class="tags">${c.hashtags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+        ${c.caution ? `<p class="caution"><b>주의</b> · ${esc(c.caution)}</p>` : ''}
       </div>`).join('');
 
     return `
-      <section class="card p-5 fade-up">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="section-head mb-0"><h3>채널별 보완 콘텐츠</h3><span class="hint">복사해서 바로 발행</span></div>
-          <div class="flex gap-1 rounded-xl bg-slate-50 p-1 ring-1 ring-inset ring-slate-200/70" role="tablist">${tabs}</div>
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">채널별 보완 콘텐츠</h3>
+          <span class="section-hint">복사해서 바로 발행</span>
         </div>
-        <div class="mt-4">${panels}</div>
+        <div class="tabs" role="tablist">${tabs}</div>
+        ${panels}
       </section>`;
   }
 
@@ -440,22 +427,20 @@
     const sources = r.sources || [];
     if (!sources.length) return '';
     const rows = sources.map((src) => `
-      <a href="${esc(src.url)}" target="_blank" rel="noreferrer"
-         class="flex gap-2 rounded-lg border border-slate-200/80 p-2 transition hover:border-slate-300 hover:bg-slate-50">
-        <img src="${esc(src.faviconUrl)}" alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded" loading="lazy" referrerpolicy="no-referrer" />
+      <a href="${esc(src.url)}" target="_blank" rel="noreferrer" class="source-row">
+        <img src="${esc(src.faviconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
         <span class="min-w-0">
-          <span class="block truncate text-[11px] font-medium text-slate-800">${esc(src.title)}</span>
-          <span class="mt-0.5 flex items-center gap-1.5 text-[9.5px] text-slate-400">
-            <span>${esc(src.hostname)}</span>
-            ${src.date ? `<span>· ${esc(src.date)}</span>` : ''}
-            ${src.demo ? '<span class="font-bold text-amber-600">· DEMO</span>' : ''}
-          </span>
+          <span class="source-title">${esc(src.title)}</span>
+          <span class="source-meta">${esc(src.hostname)}${src.date ? ` · ${esc(src.date)}` : ''}${src.demo ? ' · DEMO' : ''}</span>
         </span>
       </a>`).join('');
     return `
-      <section class="card p-5 fade-up">
-        <div class="section-head"><h3>수집 출처</h3><span class="hint">Liner Search + Search Agent · ${sources.length}건</span></div>
-        <div class="grid gap-1.5 sm:grid-cols-2">${rows}</div>
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">수집 출처</h3>
+          <span class="section-hint">Liner Search + Search Agent · ${sources.length}건</span>
+        </div>
+        <div class="source-list">${rows}</div>
       </section>`;
   }
 
@@ -465,49 +450,53 @@
     const totals = pipeline.totals || {};
     const rows = calls.map((call) => `
       <div class="call-row">
-        <span class="mono truncate text-slate-700">${esc(ENDPOINT_LABEL[call.endpoint] || call.endpoint)}</span>
-        <span class="${call.mode === 'live' ? 'text-emerald-600' : 'text-amber-600'} font-medium">${call.mode === 'live' ? 'LIVE' : 'DEMO'}</span>
-        <span class="${call.status === 'ok' ? 'text-emerald-600' : call.status === 'fallback' ? 'text-amber-600' : 'text-rose-600'}">${esc(call.status)}</span>
-        <span class="mono text-slate-500">${call.mode === 'demo' ? '—' : fmtMs(call.latency_ms)}</span>
-        <span class="mono truncate text-[9.5px] text-slate-400">${esc(call.request_id || call.detail || '')}</span>
+        <span class="mono truncate">${esc(ENDPOINT_LABEL[call.endpoint] || call.endpoint)}</span>
+        <span class="mono ${call.mode === 'live' ? 'mode-live' : 'mode-demo'}">${call.mode === 'live' ? 'LIVE' : 'DEMO'}</span>
+        <span class="mono status-${esc(call.status)}">${esc(call.status)}</span>
+        <span class="mono">${call.mode === 'demo' ? '—' : fmtMs(call.latency_ms)}</span>
+        <span class="mono truncate">${esc(call.request_id || call.detail || '')}</span>
       </div>`).join('');
 
     const stepRows = (pipeline.steps || []).map((step) => `
-      <div class="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-1.5">
-        <span class="text-[10.8px] text-slate-600"><b class="text-slate-800">${step.index}.</b> ${esc(step.title.split(' · ')[0])}</span>
-        <span class="mono text-[10px] text-slate-500">${fmtMs(step.latency_ms)}</span>
+      <div class="pipe-step">
+        <span><b>${step.index}.</b> ${esc(step.title.split(' · ')[0])}</span>
+        <span class="mono">${fmtMs(step.latency_ms)}</span>
       </div>`).join('');
 
     const raw = esc(JSON.stringify({ ...r, input: { ...r.input, channel_text: r.input.channel_text?.slice(0, 400) } }, null, 2));
+    const isLive = pipeline.mode === 'live';
 
     return `
-      <section class="card p-5 fade-up">
-        <div class="section-head"><h3>API 파이프라인 투명성</h3><span class="hint">어떤 Liner API가 몇 번 호출되었는지</span></div>
-        <div class="grid grid-cols-3 gap-2">
-          <div class="rounded-xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200/70">
-            <p class="text-[9.5px] font-semibold uppercase tracking-wide text-slate-400">API 호출</p>
-            <p class="mt-1 text-[17px] font-bold tabular-nums">${totals.total ?? calls.length}<span class="text-[10px] font-medium text-slate-400">회</span></p>
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">파이프라인</h3>
+          <span class="section-hint">어떤 Liner API가 몇 번 호출되었는지</span>
+        </div>
+        <div class="stat-grid">
+          <div class="stat">
+            <p class="stat-label">API 호출</p>
+            <p class="stat-value">${totals.total ?? calls.length}<span>회</span></p>
           </div>
-          <div class="rounded-xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200/70">
-            <p class="text-[9.5px] font-semibold uppercase tracking-wide text-slate-400">실행 모드</p>
-            <p class="mt-1 text-[13px] font-bold ${pipeline.mode === 'live' ? 'text-emerald-600' : 'text-amber-600'}">${pipeline.mode === 'live' ? 'LIVE' : 'DEMO'}</p>
+          <div class="stat">
+            <p class="stat-label">실행 모드</p>
+            <p class="stat-value ${isLive ? 'is-live' : 'is-demo'}">${isLive ? 'LIVE' : 'DEMO'}</p>
           </div>
-          <div class="rounded-xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200/70">
-            <p class="text-[9.5px] font-semibold uppercase tracking-wide text-slate-400">총 소요</p>
-            <p class="mt-1 text-[17px] font-bold tabular-nums">${fmtMs(pipeline.latency_ms || 0)}</p>
+          <div class="stat">
+            <p class="stat-label">총 소요</p>
+            <p class="stat-value">${fmtMs(pipeline.latency_ms || 0)}</p>
           </div>
         </div>
-        <div class="mt-3 space-y-1">${stepRows}</div>
-        <div class="mt-4 overflow-hidden rounded-xl border border-slate-200/80">
+        <div class="pipe-steps">${stepRows}</div>
+        <div class="table">
           <div class="call-row head">
-            <span>ENDPOINT</span><span>MODE</span><span>STATUS</span><span>LATENCY</span><span>REQUEST ID</span>
+            <span>Endpoint</span><span>Mode</span><span>Status</span><span>Latency</span><span>Request</span>
           </div>
           ${rows}
         </div>
-        <p class="mt-2 text-[9.5px] text-slate-400">model ${esc(pipeline.model || '')} · base ${esc(pipeline.base_url || '')} · API 키는 응답·로그에 포함되지 않습니다.</p>
-        <details class="raw mt-3">
+        <p class="fineprint">model ${esc(pipeline.model || '')} · base ${esc(pipeline.base_url || '')} · API 키는 응답·로그에 포함되지 않습니다.</p>
+        <details class="raw">
           <summary>원시 결과 JSON 보기</summary>
-          <pre class="mono mt-2 max-h-72 overflow-auto rounded-xl bg-slate-900 p-3 text-[9.5px] leading-relaxed text-slate-200">${raw}</pre>
+          <pre class="mono raw-json">${raw}</pre>
         </details>
       </section>`;
   }
@@ -516,7 +505,7 @@
   /* 인터랙션                                                           */
   /* ------------------------------------------------------------------ */
   function bindTabs() {
-    const tabs = $$('.tab-btn', els.results);
+    const tabs = $$('.tab', els.results);
     const panels = $$('[data-panel]', els.results);
     tabs.forEach((tab) => {
       tab.addEventListener('click', () => {

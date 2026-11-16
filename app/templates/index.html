@@ -5,197 +5,183 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geo Channel Auditor · 상권 결핍 진단</title>
   <meta name="description" content="상권 Geo와 외부 채널 텍스트를 Liner Search·Search Agent·Router로 대조해 정보 결핍과 보완 콘텐츠를 진단합니다." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📍</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111827'/%3E%3Ccircle cx='16' cy='16' r='6.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='1.8' fill='%23fff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
       theme: {
         extend: {
-          fontFamily: { sans: ['-apple-system', 'BlinkMacSystemFont', 'Apple SD Gothic Neo', 'Pretendard', 'Malgun Gothic', 'Noto Sans KR', 'sans-serif'] },
-          colors: { ink: '#0b1220' }
+          fontFamily: { sans: ['Pretendard Variable', 'Pretendard', '-apple-system', 'Apple SD Gothic Neo', 'sans-serif'] }
         }
       }
     };
   </script>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-900 antialiased">
+<body>
 
-<header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur">
-  <div class="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">
-    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-[17px] text-white shadow-sm">📍</div>
-    <div class="min-w-0">
-      <h1 class="truncate text-[15px] font-semibold tracking-tight">Geo Channel Auditor</h1>
-      <p class="truncate text-[11px] text-slate-500">상권 Geo × Liner Platform API · 외부 채널 결핍 진단</p>
-    </div>
-    <div class="ml-auto flex items-center gap-2">
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="0.75" y="0.75" width="22.5" height="22.5" rx="6" fill="#111827" />
+        <circle cx="12" cy="12" r="4.9" fill="none" stroke="#fff" stroke-width="1.5" />
+        <circle cx="12" cy="12" r="1.4" fill="#fff" />
+      </svg>
+      <span class="brand-name">Geo Channel Auditor</span>
+    </a>
+    <div class="header-right">
       <span id="mode-badge" class="badge {{ 'badge-live' if mode == 'live' else 'badge-demo' }}">
         {{ 'LIVE LINER API' if mode == 'live' else 'DEMO MOCK MODE' }}
       </span>
-      <span class="hidden text-[11px] text-slate-400 sm:inline">v{{ version }}</span>
+      <span class="version">v{{ version }}</span>
     </div>
   </div>
 </header>
 
-<section class="hero">
-  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:py-10">
-    <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-      <div class="max-w-2xl">
-        <p class="mb-2 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium text-emerald-200 ring-1 ring-inset ring-white/15">
-          Liner .EXE-THON · 팀 클로클립
-        </p>
-        <h2 class="text-[26px] font-bold leading-tight tracking-tight sm:text-[32px]">
-          우리 가게 채널에<br class="sm:hidden" /> 빠진 정보를, 상권 검색으로 찾아냅니다
-        </h2>
-        <p class="mt-3 text-[13.5px] leading-relaxed text-slate-300 sm:text-sm">
-          상권 위치와 업종, 지금 운영 중인 채널 텍스트를 넣으면
-          <span class="text-white">Liner Search</span>로 실시간 상권 수요를 모으고,
-          <span class="text-white">Search Agent</span>로 고객 기대 정보를 정리한 뒤,
-          <span class="text-white">Router</span>가 결핍 3개와 채널별 보완 콘텐츠를 바로 씁니다.
-        </p>
-      </div>
-      <div class="grid grid-cols-3 gap-2 text-center lg:w-[380px]">
-        <div class="hero-chip"><span>01</span><b>Search</b><i>상권 수요 수집</i></div>
-        <div class="hero-chip"><span>02</span><b>Agent</b><i>기대 정보 분석</i></div>
-        <div class="hero-chip"><span>03</span><b>Router</b><i>결핍 · 처방</i></div>
-      </div>
-    </div>
+<section class="intro">
+  <div class="container intro-inner">
+    <p class="eyebrow">Liner .EXE-THON · 팀 클로클립</p>
+    <h1 class="intro-title">우리 가게 채널에 빠진 정보를,<br />상권 검색으로 찾아냅니다</h1>
+    <p class="intro-lead">
+      상권 위치와 업종, 지금 운영 중인 채널 텍스트를 넣으면 Liner Search로 상권 수요를 모으고,
+      Search Agent로 고객이 기대하는 정보를 정리한 뒤, Router가 결핍 3개와 채널별 보완 콘텐츠를 씁니다.
+    </p>
+    <ol class="flow">
+      <li><span class="flow-num">01</span><div><b>Search</b><i>상권 위치·업종으로 검색 수요 수집</i></div></li>
+      <li><span class="flow-num">02</span><div><b>Agent</b><i>방문 전에 확인하려는 정보 정리</i></div></li>
+      <li><span class="flow-num">03</span><div><b>Router</b><i>결핍 진단과 채널별 콘텐츠 처방</i></div></li>
+    </ol>
   </div>
 </section>
 
-<main class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
-  <div class="grid gap-6 lg:grid-cols-12">
+<main class="container main-grid">
 
-    <!-- 입력 패널 -->
-    <aside class="lg:col-span-4">
-      <div class="lg:sticky lg:top-[72px] space-y-4">
-        <div class="card p-5">
-          <div class="mb-3 flex items-baseline justify-between">
-            <h3 class="text-[13px] font-semibold text-slate-900">원클릭 시연</h3>
-            <span class="text-[10.5px] text-slate-400">가상 데이터</span>
-          </div>
-          <div class="space-y-2" id="sample-list">
-            {% for s in samples %}
-            <button type="button" class="sample-btn" data-sample-id="{{ s.id }}">
-              <span class="sample-emoji">{{ s.emoji }}</span>
-              <span class="min-w-0 flex-1 text-left">
-                <span class="block truncate text-[12.5px] font-semibold text-slate-900">{{ s.label }}</span>
-                <span class="block truncate text-[11px] text-slate-500">{{ s.store_name }}</span>
-              </span>
-              <svg class="h-4 w-4 shrink-0 text-slate-300" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd"/></svg>
-            </button>
-            {% endfor %}
-          </div>
-
-          <div class="my-5 flex items-center gap-3">
-            <span class="h-px flex-1 bg-slate-200"></span>
-            <span class="text-[10.5px] font-medium uppercase tracking-wider text-slate-400">직접 입력</span>
-            <span class="h-px flex-1 bg-slate-200"></span>
-          </div>
-
-          <form id="audit-form" class="space-y-3" autocomplete="off">
-            <div>
-              <label class="field-label" for="location">상권 위치</label>
-              <input id="location" name="location" class="field" placeholder="예: 서울 성동구 성수동2가" required />
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="field-label" for="industry">업종</label>
-                <input id="industry" name="industry" class="field" placeholder="예: 스페셜티 카페" required />
-              </div>
-              <div>
-                <label class="field-label" for="store_name">매장명 <span class="text-slate-300">(선택)</span></label>
-                <input id="store_name" name="store_name" class="field" placeholder="예: 모먼트 성수점" />
-              </div>
-            </div>
-            <div>
-              <div class="flex items-baseline justify-between">
-                <label class="field-label" for="channel_text">현재 채널 텍스트</label>
-                <span class="text-[10.5px] text-slate-400"><span id="char-count">0</span>자</span>
-              </div>
-              <textarea id="channel_text" name="channel_text" rows="7" class="field field-area"
-                placeholder="인스타그램 소개·최근 게시물, 네이버 플레이스 소개, 블로그 글 등을 그대로 붙여넣으세요." required></textarea>
-              <p class="mt-1 text-[10.5px] leading-relaxed text-slate-400">상권·업종만 넣어도 되고, 채널 텍스트가 구체적일수록 진단이 정확해집니다.</p>
-            </div>
-            <details class="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-inset ring-slate-200/70">
-              <summary class="cursor-pointer text-[11.5px] font-medium text-slate-600">Live 모드로 실행 (Liner API 키)</summary>
-              <div class="mt-2 space-y-1.5">
-                <input id="api_key" type="password" class="field" placeholder="lin_live_..." autocomplete="off" spellcheck="false" />
-                <p class="text-[10.5px] leading-relaxed text-slate-500">
-                  입력한 키는 이번 요청에만 사용하고 <b class="text-slate-700">저장·로깅하지 않습니다.</b>
-                  비워두면 서버의 <code class="rounded bg-slate-200/70 px-1">LINER_API_KEY</code>를 쓰고, 그것도 없으면 데모 모드로 실행합니다.
-                </p>
-              </div>
-            </details>
-
-            <button type="submit" id="run-btn" class="run-btn">
-              <span id="run-btn-label">진단 시작</span>
-              <svg id="run-btn-icon" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.34-5.89a1.5 1.5 0 000-2.54L6.3 2.84z"/></svg>
-            </button>
-          </form>
-        </div>
-
-        <div class="card px-4 py-3.5">
-          <p class="text-[10.5px] leading-relaxed text-slate-500">
-            <b class="text-slate-700">해커톤 규정 준수.</b> 모든 샘플은 가상 매장·가상 채널 텍스트이며 실제 고객 데이터를 쓰지 않습니다.
-            API 키는 환경변수 또는 1회성 입력으로만 다루고 코드에 하드코딩하지 않습니다.
-          </p>
-        </div>
+  <!-- 입력 -->
+  <aside class="sticky-col">
+    <div class="card pad">
+      <div class="panel-head">
+        <h2 class="section-title">시연 데이터</h2>
+        <span class="section-hint">가상 매장 3종</span>
       </div>
-    </aside>
-
-    <!-- 결과 패널 -->
-    <section class="lg:col-span-8">
-      <!-- 빈 상태 -->
-      <div id="empty" class="card empty-card">
-        <div class="mx-auto max-w-md text-center">
-          <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-900/[0.04] text-2xl">🧭</div>
-          <h3 class="text-[15px] font-semibold">왼쪽에서 샘플을 누르면 3초 안에 진단이 시작됩니다</h3>
-          <p class="mt-2 text-[12.5px] leading-relaxed text-slate-500">
-            성수동 카페 · 서울대입구 피부과 · 산본 수제버거 세 가지 가상 매장으로
-            상권 수요 수집부터 콘텐츠 처방까지 한 번에 확인할 수 있습니다.
-          </p>
-          <div class="mt-6 grid gap-2 text-left">
-            <div class="empty-row"><span class="empty-num">1</span><div><b>Liner Search</b><i>상권 위치·업종으로 실시간 검색 수요와 경쟁 출처를 수집합니다.</i></div></div>
-            <div class="empty-row"><span class="empty-num">2</span><div><b>Liner Search Agent</b><i>고객이 방문 전에 기대하는 정보를 인용과 함께 정리합니다.</i></div></div>
-            <div class="empty-row"><span class="empty-num">3</span><div><b>Liner Router</b><i>채널 텍스트와 대조해 결핍 3개와 채널별 보완 콘텐츠를 생성합니다.</i></div></div>
-          </div>
-        </div>
+      <div class="sample-list" id="sample-list">
+        {% for s in samples %}
+        <button type="button" class="sample-btn" data-sample-id="{{ s.id }}">
+          <span class="sample-index">{{ '%02d' % loop.index }}</span>
+          <span class="sample-text">
+            <span class="sample-label">{{ s.label }}</span>
+            <span class="sample-store">{{ s.store_name }}</span>
+          </span>
+          <svg class="sample-arrow" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        {% endfor %}
       </div>
 
-      <!-- 진행 -->
-      <div id="progress" class="card hidden p-5 sm:p-6">
-        <div class="mb-5 flex items-center justify-between">
-          <h3 class="text-[13px] font-semibold">진단 진행</h3>
-          <span id="progress-mode" class="badge badge-demo">DEMO MOCK MODE</span>
-        </div>
-        <ol id="step-list" class="space-y-2.5"></ol>
-        <p class="mt-5 text-[11px] text-slate-400">Liner API 파이프라인이 순서대로 실행됩니다. 단계별 소요 시간은 결과의 투명성 패널에 기록됩니다.</p>
-      </div>
+      <div class="divider"><span>직접 입력</span></div>
 
-      <!-- 오류 -->
-      <div id="error" class="card card-error hidden p-5">
-        <div class="flex gap-3">
-          <span class="text-lg">⚠️</span>
+      <form id="audit-form" class="form" autocomplete="off">
+        <div>
+          <label class="field-label" for="location">상권 위치</label>
+          <input id="location" name="location" class="field" placeholder="예: 서울 성동구 성수동2가" required />
+        </div>
+        <div class="form-row">
           <div>
-            <h3 class="text-[13px] font-semibold text-rose-900">진단을 완료하지 못했습니다</h3>
-            <p id="error-detail" class="mt-1 text-[12px] leading-relaxed text-rose-800"></p>
+            <label class="field-label" for="industry">업종</label>
+            <input id="industry" name="industry" class="field" placeholder="예: 스페셜티 카페" required />
+          </div>
+          <div>
+            <label class="field-label" for="store_name">매장명 <span class="optional">선택</span></label>
+            <input id="store_name" name="store_name" class="field" placeholder="예: 모먼트 성수점" />
           </div>
         </div>
-      </div>
+        <div>
+          <div class="label-row">
+            <label class="field-label" for="channel_text">현재 채널 텍스트</label>
+            <span class="counter"><span id="char-count">0</span>자</span>
+          </div>
+          <textarea id="channel_text" name="channel_text" rows="7" class="field field-area"
+            placeholder="인스타그램 소개·최근 게시물, 네이버 플레이스 소개, 블로그 글을 그대로 붙여넣으세요." required></textarea>
+          <p class="helper">상권·업종만 넣어도 되고, 채널 텍스트가 구체적일수록 진단이 정확해집니다.</p>
+        </div>
 
-      <!-- 결과 -->
-      <div id="results" class="hidden space-y-4"></div>
-    </section>
-  </div>
+        <details class="disclosure">
+          <summary>Live 모드로 실행 (Liner API 키)</summary>
+          <div class="disclosure-body">
+            <input id="api_key" type="password" class="field" placeholder="lin_live_..." autocomplete="off" spellcheck="false" />
+            <p class="helper">
+              입력한 키는 이번 요청에만 쓰고 <b>저장·로깅하지 않습니다.</b>
+              비워두면 서버의 <code>LINER_API_KEY</code>를 쓰고, 그것도 없으면 데모 모드로 실행합니다.
+            </p>
+          </div>
+        </details>
+
+        <button type="submit" id="run-btn" class="btn-primary">
+          <span id="run-btn-label">진단 시작</span>
+          <svg id="run-btn-icon" class="btn-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M4 10h11.4M10.8 4.6 16.2 10l-5.4 5.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </form>
+    </div>
+
+    <p class="compliance">
+      <b>해커톤 규정 준수.</b> 모든 샘플은 가상 매장·가상 채널 텍스트이며 실제 고객 데이터를 쓰지 않습니다.
+      API 키는 환경변수 또는 1회성 입력으로만 다루고 코드에 하드코딩하지 않습니다.
+    </p>
+  </aside>
+
+  <!-- 결과 -->
+  <section class="results-col">
+    <!-- 빈 상태 -->
+    <div id="empty" class="card empty">
+      <div class="empty-inner">
+        <svg class="empty-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.3" />
+          <path d="M15.3 8.7 13.6 13.6 8.7 15.3 10.4 10.4z" fill="currentColor" />
+        </svg>
+        <h2 class="empty-title">왼쪽에서 샘플을 누르면 바로 진단이 시작됩니다</h2>
+        <p class="empty-desc">
+          성수동 카페 · 서울대입구 피부과 · 산본 수제버거, 세 가지 가상 매장으로
+          상권 수요 수집부터 콘텐츠 처방까지 한 번에 확인할 수 있습니다.
+        </p>
+        <ol class="empty-steps">
+          <li><span class="empty-num">01</span><div><b>Liner Search</b><i>상권 위치·업종으로 실시간 검색 수요와 경쟁 출처를 수집합니다.</i></div></li>
+          <li><span class="empty-num">02</span><div><b>Liner Search Agent</b><i>고객이 방문 전에 기대하는 정보를 인용과 함께 정리합니다.</i></div></li>
+          <li><span class="empty-num">03</span><div><b>Liner Router</b><i>채널 텍스트와 대조해 결핍 3개와 채널별 보완 콘텐츠를 생성합니다.</i></div></li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- 진행 -->
+    <div id="progress" class="card pad hidden">
+      <div class="progress-head">
+        <h2 class="section-title">진단 진행</h2>
+        <span id="progress-mode" class="badge badge-demo">DEMO MOCK MODE</span>
+      </div>
+      <ol id="step-list" class="steps"></ol>
+      <p class="fineprint">Liner API 파이프라인이 순서대로 실행됩니다. 단계별 소요 시간은 결과의 투명성 패널에 기록됩니다.</p>
+    </div>
+
+    <!-- 오류 -->
+    <div id="error" class="card card-error pad hidden">
+      <p class="error-title">진단을 완료하지 못했습니다</p>
+      <p id="error-detail" class="error-detail"></p>
+    </div>
+
+    <!-- 결과 -->
+    <div id="results" class="results-col hidden"></div>
+  </section>
 </main>
 
-<footer class="mx-auto max-w-7xl px-4 pb-10 pt-2 sm:px-6">
-  <div class="flex flex-col gap-2 border-t border-slate-200 pt-4 text-[10.5px] text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+<footer class="site-footer">
+  <div class="container footer-inner">
     <p>Geo Channel Auditor · Liner .EXE-THON 출품작 · 팀 클로클립 (최경선)</p>
-    <p class="flex items-center gap-3">
-      <a class="hover:text-slate-600" href="/api/health" target="_blank" rel="noreferrer">/api/health</a>
-      <a class="hover:text-slate-600" href="/docs" target="_blank" rel="noreferrer">API 문서</a>
+    <p class="footer-links">
+      <a href="/api/health" target="_blank" rel="noreferrer">/api/health</a>
+      <a href="/docs" target="_blank" rel="noreferrer">API 문서</a>
       <span>{{ 'Live 모드' if mode == 'live' else '데모 모드' }} · model {{ model }}</span>
     </p>
   </div>
