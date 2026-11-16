@@ -5,9 +5,9 @@
 2. Liner Search Agent API — 상권 고객이 기대하는 정보·질문 요약 + 인용 수집
 3. Liner Router API       — 채널 텍스트와 수요를 대조해 결핍 진단 + 채널별 보완 콘텐츠 생성
 
-부가 분석: 수집한 모든 출처 URL을 채널(네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론)로
+부가 분석: Liner Search와 Liner Search Agent가 인용한 모든 출처 URL을 채널(네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론)로
 분류한 `citation_analysis`와, 그 비중으로 "어느 채널부터 채울지"를 정한 `recommended_channels`를
-결과에 함께 담는다.
+결과에 함께 담는다. 인용 비중은 Liner의 검색·에이전트가 실제로 인용한 출처만 세며, GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 별도로 수집하지는 않는다.
 
 `LINER_API_KEY`가 없으면 같은 파이프라인이 `app/demo_fixtures.py`의 가상 응답으로 동작한다.
 API 호출이 실패하면 남은 단계를 데모 데이터로 폴백하고, 응답에 `degraded` 플래그와 경고를 남긴다.
@@ -491,7 +491,10 @@ def build_citation_analysis(sources: list[dict[str, Any]]) -> dict[str, Any]:
     if top:
         cited = [c for c in channels if c["count"]]
         breakdown = ", ".join(f"{c['label']} {c['share_pct']}%({c['count']}건)" for c in cited)
-        summary = f"수집 출처 {total}건 중 {cited[0]['label']}가 {cited[0]['share_pct']}%로 가장 많이 인용됩니다. {breakdown}."
+        summary = (
+            f"Liner Search·Search Agent가 인용한 출처 {total}건 중 "
+            f"{cited[0]['label']}가 {cited[0]['share_pct']}%로 가장 많습니다. {breakdown}."
+        )
     else:
         summary = "분석할 출처 URL이 없어 인용 비중을 계산하지 못했습니다."
 
@@ -518,7 +521,7 @@ def _recommend_reason(channel: dict[str, Any], rank: int) -> str:
     action = _RECOMMEND_ACTIONS.get(channel["channel"], "이 채널의 정보를 먼저 보완하세요.")
     if channel.get("count"):
         lead = (
-            f"상권 인용 비중 {channel['share_pct']}%({channel['count']}건)로 "
+            f"Liner 인용 비중 {channel['share_pct']}%({channel['count']}건)로 "
             f"인용 순위 {rank}위 채널입니다."
         )
     else:
@@ -728,6 +731,8 @@ ROUTER_SYSTEM_PROMPT = (
     "규칙: gaps는 정확히 3개, recommended_channels는 정확히 3개(인용 비중이 높은 채널부터 rank 1~3), "
     "contents는 instagram·naver_place·blog_faq 각 1개. "
     "recommended_channels의 reason에는 반드시 제공된 인용 비중 수치를 포함한다. "
+    "인용 비중은 Liner Search·Liner Search Agent가 상권 질문에 실제로 인용한 출처를 채널별로 집계한 값이며, "
+    "GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 뜻하지 않는다. "
     "source_urls에는 제공된 출처 목록의 URL만 쓴다. 본문은 실제로 발행할 수 있는 완성된 한국어 문장으로 쓰고, "
     "확인되지 않은 수치를 지어내지 말고 [확인 필요] 표기를 쓴다. 의료·법률 등 규제 업종이면 "
     "caution에 광고 심의·표시광고 주의를 적는다."
@@ -764,7 +769,7 @@ def _router_user_prompt(
         f"[업종] {audit.industry}\n"
         f"[상권 검색 쿼리] {', '.join(queries)}\n\n"
         f"[상권 고객 수요 요약]\n{demand_answer}\n\n"
-        f"[인용 출처 비중 — Liner Search + Search Agent {citation.get('total', 0)}건]\n{citation_lines}\n\n"
+        f"[Liner 인용 출처 비중 — Liner Search · Liner Search Agent {citation.get('total', 0)}건]\n{citation_lines}\n\n"
         f"[매장 공개 채널 현황]\n{collected_block}\n\n"
         f"[수집된 출처]\n{source_lines}\n\n"
         f"[현재 외부 채널 텍스트]\n{channel_text[:6000] or '(직접 입력 없음 — 공개 채널 자동 수집 결과로 대신합니다)'}\n\n"

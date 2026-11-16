@@ -192,8 +192,9 @@ a { color: inherit; }
 
 .section-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
   margin-bottom: 12px;
 }
 .section-title {

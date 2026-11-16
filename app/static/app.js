@@ -371,7 +371,7 @@
       </section>`;
   }
 
-  /* AI 인용 출처 분석 */
+  /* Liner 인용 출처 분석 — Liner Search + Liner Search Agent가 인용한 출처만 집계한다. */
   function renderCitation(r) {
     const citation = r.citation_analysis;
     const channels = citation?.channels || [];
@@ -396,8 +396,8 @@
     return `
       <section class="card pad fade-up">
         <div class="section-head">
-          <h3 class="section-title">AI 인용 출처 분석</h3>
-          <span class="section-hint">Liner Search + Search Agent · 출처 ${citation.total}건</span>
+          <h3 class="section-title">Liner 인용 출처 분석</h3>
+          <span class="section-hint">Liner 검색·에이전트 인용 · ${citation.total}건</span>
         </div>
         <p class="body-text sm">${esc(citation.summary)}</p>
         <div class="prop-bar" role="img" aria-label="채널별 인용 비중">${segments}</div>
@@ -425,14 +425,14 @@
       <section class="card pad fade-up">
         <div class="section-head">
           <h3 class="section-title">채널 우선순위 추천</h3>
-          <span class="section-hint">인용 비중 · 상권 수요 기준</span>
+          <span class="section-hint">Liner 인용 비중 기준</span>
         </div>
         <div class="rec-hero">
           <div class="rec-hero-head">
             <span class="rec-badge">1순위 추천</span>
             <span class="rec-hero-label">${esc(top.label)}</span>
           </div>
-          <p class="rec-metric">상권 인용 비중 ${fmtPct(top.share_pct)}% · ${top.count}건</p>
+          <p class="rec-metric">Liner 인용 비중 ${fmtPct(top.share_pct)}% · ${top.count}건</p>
           <p class="rec-reason">${esc(top.reason)}</p>
         </div>
         ${rows ? `<ul class="rec-list">${rows}</ul>` : ''}

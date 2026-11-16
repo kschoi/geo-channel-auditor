@@ -1,11 +1,18 @@
 # 📍 Geo Channel Auditor
 
-> **제1회 라이너 해커톤 (.EXE-THON) 출품작**
+> **제1회 라이너 해커톤 (.EXE-THON) 출품작** · v0.2.0
 > 상권 Geo 분석 기반 외부 채널 결핍 진단 · 콘텐츠 처방 에이전트
 > 팀 클로클립 · 개인 참가: 최경선
 
 오프라인 매장은 인스타그램·네이버 플레이스·블로그를 운영하지만, **"이 상권의 고객이 방문 전에 확인하려는 정보 중 우리 채널에 없는 것은 무엇인가"** 를 객관적으로 진단하지 못합니다.
-Geo Channel Auditor는 **매장명과 상권 위치만** 넣으면 공개 채널을 자동 수집해 **Liner Search → Liner Search Agent → Liner Router** 3단계 파이프라인으로 돌리고, ① 정보 결핍 3개, ② **AI 인용 출처 분석**(상권 검색이 어떤 채널을 얼마나 인용하는지), ③ **채널 우선순위 추천**(어디부터 채워야 하는지), ④ 인스타그램 카드뉴스·플레이스 새소식·블로그 FAQ 원고를 **바로 발행할 수 있는 형태로** 써 줍니다.
+Geo Channel Auditor는 **매장명과 상권 위치만** 넣으면 공개 채널을 자동 수집해 **Liner Search → Liner Search Agent → Liner Router** 3단계 파이프라인으로 돌리고, ① 정보 결핍 3개, ② **Liner 인용 출처 분석**(Liner 검색·에이전트가 상권 질문에 실제로 인용한 채널 비중), ③ **채널 우선순위 추천**(어디부터 채워야 하는지), ④ 인스타그램 카드뉴스·플레이스 새소식·블로그 FAQ 원고를 **바로 발행할 수 있는 형태로** 써 줍니다.
+
+## ✨ v0.2.0 핵심 기능
+
+1. **매장명·위치 기반 공개 채널 자동 수집** — 채널 텍스트를 붙여넣지 않아도 매장명·상권 위치·업종만으로 Liner Search가 공개 웹의 플레이스·블로그·SNS 노출을 먼저 수집합니다. 기존 문구가 있으면 선택 입력으로 더해 `직접 입력 + 자동 수집` 모드로 진단합니다.
+2. **Liner 인용 출처 5채널 비중 분석** — Liner Search와 Liner Search Agent가 상권 질문에 실제로 인용한 출처를 `네이버 블로그 · 네이버 플레이스 · 인스타그램/SNS · 공식 웹 · 리뷰/언론` 5개 채널로 분류해 건수·비중(%)·대표 도메인을 집계합니다. GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 수집하는 기능이 아닙니다.
+3. **인용 비중 기반 우선 추천 채널 + Liner Router 콘텐츠 생성** — 인용 비중과 상권 검색 수요를 근거로 1~3순위 채널을 정하고, Liner Router(`liner-gpt-router`)가 결핍 3건과 그 채널에 맞는 보완 콘텐츠를 함께 생성합니다. Router 응답이 비어도 인용 비중 기반 결정론적 폴백으로 추천이 항상 채워집니다.
+4. **미니멀 모바일·데스크톱 UI** — 흰 바탕·얇은 헤어라인·Pretendard 타이포의 단일 화면. 모바일 390px에서도 직접 입력 폼이 첫 화면에 오고, 결과는 점수 → 인용 비중 바 → 1순위 추천 배너 → 결핍 카드 → 채널 탭 순서로 읽힙니다.
 
 ```
 상권 위치 + 업종 (+ 매장명, 채널 텍스트는 선택)
@@ -60,8 +67,8 @@ UI의 **“Live 모드로 실행”** 칸에 키를 그때그때 넣을 수도 �
 | 진행 표시 | 1. Liner Search(자동 수집 포함) → 2. Liner Search Agent → 3. Liner Router 단계별 상태·소요 시간(SSE 스트리밍) |
 | 결과 | 종합 점수 게이지 + 4개 세부 점수(방문편의·가격투명성·차별화·신뢰근거) |
 | 수집된 매장 채널 | 자동 수집 / 직접 입력 / 직접+자동 배지, 수집 요약, 수집 쿼리·채널 분포 |
-| AI 인용 출처 분석 | 채널별 인용 비중 수평 바 + 건수·퍼센트 + 대표 도메인 (네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론) |
-| 채널 우선순위 추천 | "1순위 추천: 네이버 블로그 (상권 인용 비중 XX%)" + 추천 이유, 2·3순위 목록 |
+| Liner 인용 출처 분석 | 채널별 인용 비중 수평 바 + 건수·퍼센트 + 대표 도메인 (네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론) |
+| 채널 우선순위 추천 | "1순위 추천: 네이버 블로그 (Liner 인용 비중 XX%)" + 추천 이유, 2·3순위 목록 |
 | 3대 정보 결핍 | 심각도 배지, 누락 이유, 상권 검색 수요 근거, **클릭 가능한 근거 출처 뱃지**, 한 줄 처방 |
 | 채널별 콘텐츠 | Instagram 카드뉴스 / Naver Place 새소식 / Blog FAQ 탭 + **1순위 추천 마이크로 배지** + **원클릭 복사** + 규제 주의 문구 |
 | 투명성 패널 | 어떤 Liner API가 몇 번, 어떤 모드(LIVE/DEMO)로, 얼마나 걸려 호출됐는지 + request ID + 원시 JSON |
@@ -96,12 +103,13 @@ geo-channel-auditor/
 | 헬스 | `GET /credits/balance` | `/api/health?probe=true` 에서 잔액 확인 |
 
 Base URL은 `https://platform.liner.com/api/v1`, 인증은 `x-api-key` 헤더입니다.
-3단계 결과는 모두 UI에 그대로 매핑됩니다(점수·결핍·출처·인용 분석·추천·콘텐츠·호출 로그).
+진단 1회 호출 수는 채널 텍스트를 넣으면 **5회**(검색 3 + 에이전트 1 + 라우터 1), 채널 텍스트를 비우면 자동 수집 검색 2회가 더해져 **최대 7회**입니다.
+3단계 결과는 모두 UI에 그대로 매핑됩니다(점수·결핍·출처·Liner 인용 분석·채널 추천·콘텐츠·호출 로그).
 
 ### 응답의 핵심 필드
 
 * `collected_channel` — `mode`(`manual`/`auto`/`hybrid`), `label`, `summary`, `source_count`, `queries`, `breakdown`, `sources`
-* `citation_analysis` — `total`, `summary`, 채널 5종(`naver_blog`·`naver_place`·`instagram_sns`·`official_web`·`review_media`)별 `count`·`share_pct`(합계 100%)·`domains`·`urls`, `top_channel`
+* `citation_analysis` — **Liner Search·Liner Search Agent 인용 출처** 분석. `total`, `summary`, 채널 5종(`naver_blog`·`naver_place`·`instagram_sns`·`official_web`·`review_media`)별 `count`·`share_pct`(합계 100%)·`domains`·`urls`, `top_channel`
 * `recommended_channels` — `rank`·`channel`·`label`·`reason`·`priority_badge`·`content_channel` (Router가 누락하면 인용 비중 기반 결정론적 폴백)
 * `contents[].priority_badge` — 1순위 추천 채널의 콘텐츠 탭 표시
 
@@ -128,7 +136,7 @@ uv run pytest            # 또는 .venv/bin/pytest
 * `/api/health`, `/api/samples`, `/api/audit`, `/api/audit/stream`
 * 데모 모드 샘플 3종 + 직접 입력(키워드 커버리지 기반 결핍 도출)
 * **공개 채널 자동 수집**: `channel_text` 없이 실행(`auto`)·짧은 문구(`hybrid`)·충분한 문구(`manual`), 자동 수집 검색 2회 추가 호출
-* **인용 출처 분석**: 도메인별 채널 분류(25개 URL 파라미터라이즈), 비중 합계 100%, 빈 출처 처리
+* **인용 출처 분석**: 도메인별 채널 분류(25개 URL 파라미터라이즈), 비중 합계 100%, 빈 출처 처리 (현재 61개 테스트 전체 통과)
 * **채널 우선순위 추천**: Router 응답 반영 + 누락 시 인용 비중 폴백
 * **라이브 모드**: `httpx.MockTransport` 로 Liner API 3종 응답을 흉내 내 실제 파싱 경로 검증(코드펜스 감싼 JSON 포함)
 * **폴백**: 라이브 호출 500 → 데모 데이터 대체, `degraded: true`, 경고 노출
@@ -140,6 +148,7 @@ uv run pytest            # 또는 .venv/bin/pytest
 ## ⚠️ 알려진 한계
 
 * **데모 모드의 진단은 가상 데이터입니다.** 샘플 3종은 상권별 시나리오를 재현한 픽스처이고, 직접 입력은 채널 텍스트의 키워드 커버리지로 결핍을 추정하는 템플릿입니다. 실제 상권 검색 결과가 아니며, LIVE 모드에서만 Liner API의 실시간 결과를 사용합니다.
+* **인용 분석의 범위는 Liner 검색·에이전트입니다.** `citation_analysis`는 Liner Search와 Liner Search Agent가 반환한 출처를 집계한 값이며, GPT·Perplexity·Gemini·Claude 같은 다른 AI 검색 서비스의 인용 출처를 따로 수집하지는 않습니다. 채널 분류는 도메인 규칙(5개 채널)에 따른 추정이고, 리뷰·언론 등 규칙 밖 도메인은 `리뷰·언론·기타`로 모입니다.
 * **콘텐츠 원고는 초안입니다.** 특히 의료·법률 업종은 광고 심의 대상이 될 수 있어 `caution` 필드로 주의를 표시합니다. 발행 전 사실 확인이 필요합니다.
 * Tailwind CSS는 CDN을 사용합니다(오프라인에서는 스타일이 단순해지지만 기능은 동작합니다).
 * 상권 쿼리는 한국어/한국 상권 기준으로 생성됩니다(`country_code: kr`, `lang: ko`).

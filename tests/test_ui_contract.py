@@ -141,7 +141,7 @@ def test_audit_response_matches_frontend_contract(client):
         assert key in collected, f"collected_channel.{key}가 없습니다."
     assert collected["mode"] in {"manual", "auto", "hybrid"}
 
-    # AI 인용 출처 분석
+    # Liner 인용 출처 분석 (Liner Search + Liner Search Agent)
     citation = body["citation_analysis"]
     for key in ("total", "summary", "channels", "top_channel", "top_label", "top_share_pct"):
         assert key in citation, f"citation_analysis.{key}가 없습니다."
