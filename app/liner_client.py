@@ -27,6 +27,21 @@ import httpx
 DEFAULT_BASE_URL = "https://platform.liner.com/api/v1"
 DEFAULT_MODEL = "liner-gpt-router"
 DEFAULT_TIMEOUT = 45.0
+# Router는 세 채널 원고를 한 번에 생성하므로 검색보다 오래 걸린다(실측 45초 초과).
+DEFAULT_ROUTER_TIMEOUT = 120.0
+
+# 텔레메트리에는 경로 대신 짧은 엔드포인트 이름을 쓴다(대시보드·UI 표기 공통).
+ENDPOINT_NAMES = {
+    "tools/search/web": "search.web",
+    "agents/search": "agents.search",
+    "chat/completions": "chat.completions",
+    "credits/balance": "credits.balance",
+}
+
+
+def endpoint_name(path: str) -> str:
+    key = path.strip("/")
+    return ENDPOINT_NAMES.get(key, key.replace("/", "."))
 
 
 class LinerAPIError(RuntimeError):
@@ -71,6 +86,14 @@ class LinerClient:
             self.timeout = float(timeout or os.environ.get("LINER_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT)
         except ValueError:
             self.timeout = DEFAULT_TIMEOUT
+        try:
+            router_timeout = float(
+                os.environ.get("LINER_ROUTER_TIMEOUT_SECONDS") or DEFAULT_ROUTER_TIMEOUT
+            )
+        except ValueError:
+            router_timeout = DEFAULT_ROUTER_TIMEOUT
+        # Router 응답이 검색 타임아웃에 걸려 본문 생성이 통째로 폴백되는 일을 막는다.
+        self.router_timeout = max(router_timeout, self.timeout)
         self._transport = transport
         self.calls: list[dict[str, Any]] = []
 
@@ -141,16 +164,28 @@ class LinerClient:
             "User-Agent": "geo-channel-auditor/0.1 (Liner .EXE-THON)",
         }
 
-    async def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        endpoint = path.strip("/").replace("/", ".")
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        detail: str | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        endpoint = endpoint_name(path)
         url = f"{self.base_url}/{path.lstrip('/')}"
         started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, transport=self._transport) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout or self.timeout, transport=self._transport
+            ) as client:
                 response = await client.request(method, url, json=payload, headers=self._headers())
         except httpx.HTTPError as exc:
             elapsed = int((time.perf_counter() - started) * 1000)
-            self.record(endpoint, mode="live", status="error", latency_ms=elapsed, detail=type(exc).__name__)
+            self.record(
+                endpoint, mode="live", status="error", latency_ms=elapsed, detail=detail or type(exc).__name__
+            )
             raise LinerAPIError(
                 "Liner API에 연결하지 못했습니다. 네트워크 상태를 확인해 주세요.", endpoint=endpoint
             ) from exc
@@ -184,6 +219,7 @@ class LinerClient:
             latency_ms=elapsed,
             http_status=response.status_code,
             request_id=_request_id_of(data),
+            detail=detail,
         )
         return data
 
@@ -198,6 +234,7 @@ class LinerClient:
         lang: str = "ko",
         max_results: int = 8,
         include_knowledge: bool = False,
+        detail: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "query": query,
@@ -206,7 +243,7 @@ class LinerClient:
             "max_results": max_results,
             "include_knowledge": include_knowledge,
         }
-        data = await self._request("POST", "tools/search/web", payload)
+        data = await self._request("POST", "tools/search/web", payload, detail=detail or f"query={query}")
         data.setdefault("results", [])
         data["query"] = query
         return data
@@ -243,7 +280,7 @@ class LinerClient:
             payload["response_format"] = {"type": "json_object"}
         if temperature is not None:
             payload["temperature"] = temperature
-        return await self._request("POST", "chat/completions", payload)
+        return await self._request("POST", "chat/completions", payload, timeout=self.router_timeout)
 
     async def credits_balance(self) -> dict[str, Any]:
         return await self._request("GET", "credits/balance")

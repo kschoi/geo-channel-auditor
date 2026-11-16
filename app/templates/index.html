@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geo Channel Auditor · 상권 결핍 진단</title>
-  <meta name="description" content="상권 Geo와 외부 채널 텍스트를 Liner Search·Search Agent·Router로 대조해 정보 결핍과 보완 콘텐츠를 진단합니다." />
+  <meta name="description" content="매장명과 상권 위치만으로 공개 채널을 자동 수집하고, AI 인용 출처를 분석해 먼저 채워야 할 채널과 발행용 콘텐츠를 진단합니다." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111827'/%3E%3Ccircle cx='16' cy='16' r='6.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='1.8' fill='%23fff'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
   <script src="https://cdn.tailwindcss.com"></script>
@@ -40,91 +40,95 @@
   </div>
 </header>
 
-<section class="intro">
-  <div class="container intro-inner">
+<section class="hero">
+  <div class="container hero-inner">
     <p class="eyebrow">Liner .EXE-THON · 팀 클로클립</p>
-    <h1 class="intro-title">우리 가게 채널에 빠진 정보를,<br />상권 검색으로 찾아냅니다</h1>
-    <p class="intro-lead">
-      상권 위치와 업종, 지금 운영 중인 채널 텍스트를 넣으면 Liner Search로 상권 수요를 모으고,
-      Search Agent로 고객이 기대하는 정보를 정리한 뒤, Router가 결핍 3개와 채널별 보완 콘텐츠를 씁니다.
+    <h1 class="hero-title">상권 검색으로 빈 채널을 찾고,<br class="br-wide" />발행할 콘텐츠까지 씁니다</h1>
+    <p class="hero-lead">매장명과 상권 위치만 넣으면 공개 채널을 자동 수집해 AI 인용 출처를 분석하고, 먼저 채워야 할 채널부터 추천합니다.</p>
+    <p class="hero-flow">
+      <span>Liner Search</span><i aria-hidden="true">→</i><span>Search Agent</span><i aria-hidden="true">→</i><span>Router</span>
     </p>
-    <ol class="flow">
-      <li><span class="flow-num">01</span><div><b>Search</b><i>상권 위치·업종으로 검색 수요 수집</i></div></li>
-      <li><span class="flow-num">02</span><div><b>Agent</b><i>방문 전에 확인하려는 정보 정리</i></div></li>
-      <li><span class="flow-num">03</span><div><b>Router</b><i>결핍 진단과 채널별 콘텐츠 처방</i></div></li>
-    </ol>
   </div>
 </section>
 
 <main class="container main-grid">
 
   <!-- 입력 -->
-  <aside class="sticky-col">
-    <div class="card pad">
+  <aside class="input-col">
+    <form id="audit-form" class="card pad form" autocomplete="off">
       <div class="panel-head">
-        <h2 class="section-title">시연 데이터</h2>
-        <span class="section-hint">가상 매장 3종</span>
+        <h2 class="section-title">상권 · 매장 진단</h2>
+        <span class="section-hint">3단계 자동 분석</span>
       </div>
-      <div class="sample-list" id="sample-list">
+
+      <div>
+        <label class="field-label" for="location">상권 위치 <span class="req">필수</span></label>
+        <input id="location" name="location" class="field" placeholder="예: 서울 성동구 성수동2가" required />
+      </div>
+
+      <div class="form-row">
+        <div>
+          <label class="field-label" for="industry">업종 <span class="req">필수</span></label>
+          <input id="industry" name="industry" class="field" placeholder="예: 스페셜티 카페" required />
+        </div>
+        <div>
+          <label class="field-label" for="store_name">매장명 <span class="optional">선택</span></label>
+          <input id="store_name" name="store_name" class="field" placeholder="예: 모먼트 성수점" />
+        </div>
+      </div>
+
+      <details class="disclosure" id="channel-disclosure">
+        <summary>
+          <span>현재 채널 텍스트 <span class="optional">선택 입력</span></span>
+          <span class="summary-meta" id="channel-summary-meta">자동 수집</span>
+        </summary>
+        <div class="disclosure-body">
+          <p class="helper">
+            비워두면 <b>공개 웹에서 매장 채널(플레이스·블로그·SNS)을 자동으로 찾아</b> 진단합니다.
+            이미 운영 중인 문구가 있으면 붙여넣으세요. 진단이 더 정확해집니다.
+          </p>
+          <div class="label-row">
+            <span class="field-label">채널 문구</span>
+            <span class="counter"><span id="char-count">0</span>자</span>
+          </div>
+          <textarea id="channel_text" name="channel_text" rows="6" class="field field-area"
+            placeholder="인스타그램 소개·최근 게시물, 네이버 플레이스 소개, 블로그 글을 그대로 붙여넣으세요."></textarea>
+        </div>
+      </details>
+
+      <p class="autocollect-line" id="collect-hint">
+        매장명·상권 위치만으로 실행됩니다 · 공개 채널 자동 수집
+      </p>
+
+      <button type="submit" id="run-btn" class="btn-primary">
+        <span id="run-btn-label">진단 시작</span>
+        <svg id="run-btn-icon" class="btn-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M4 10h11.4M10.8 4.6 16.2 10l-5.4 5.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+
+      <details class="disclosure">
+        <summary>Live 모드로 실행 (Liner API 키)</summary>
+        <div class="disclosure-body">
+          <input id="api_key" type="password" class="field" placeholder="lin_live_..." autocomplete="off" spellcheck="false" />
+          <p class="helper">
+            입력한 키는 이번 요청에만 쓰고 <b>저장·로깅하지 않습니다.</b>
+            비워두면 서버의 <code>LINER_API_KEY</code>를 쓰고, 그것도 없으면 데모 모드로 실행합니다.
+          </p>
+        </div>
+      </details>
+    </form>
+
+    <div class="quick-panel">
+      <p class="quick-label">빠른 예시 <span>가상 매장 3종</span></p>
+      <div class="sample-chips" id="sample-list">
         {% for s in samples %}
-        <button type="button" class="sample-btn" data-sample-id="{{ s.id }}">
-          <span class="sample-index">{{ '%02d' % loop.index }}</span>
-          <span class="sample-text">
-            <span class="sample-label">{{ s.label }}</span>
-            <span class="sample-store">{{ s.store_name }}</span>
-          </span>
-          <svg class="sample-arrow" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
+        <button type="button" class="sample-chip" data-sample-id="{{ s.id }}" title="{{ s.one_liner }}">
+          <span class="sample-chip-label">{{ s.label }}</span>
+          <span class="sample-chip-store">{{ s.store_name }}</span>
         </button>
         {% endfor %}
       </div>
-
-      <div class="divider"><span>직접 입력</span></div>
-
-      <form id="audit-form" class="form" autocomplete="off">
-        <div>
-          <label class="field-label" for="location">상권 위치</label>
-          <input id="location" name="location" class="field" placeholder="예: 서울 성동구 성수동2가" required />
-        </div>
-        <div class="form-row">
-          <div>
-            <label class="field-label" for="industry">업종</label>
-            <input id="industry" name="industry" class="field" placeholder="예: 스페셜티 카페" required />
-          </div>
-          <div>
-            <label class="field-label" for="store_name">매장명 <span class="optional">선택</span></label>
-            <input id="store_name" name="store_name" class="field" placeholder="예: 모먼트 성수점" />
-          </div>
-        </div>
-        <div>
-          <div class="label-row">
-            <label class="field-label" for="channel_text">현재 채널 텍스트</label>
-            <span class="counter"><span id="char-count">0</span>자</span>
-          </div>
-          <textarea id="channel_text" name="channel_text" rows="7" class="field field-area"
-            placeholder="인스타그램 소개·최근 게시물, 네이버 플레이스 소개, 블로그 글을 그대로 붙여넣으세요." required></textarea>
-          <p class="helper">상권·업종만 넣어도 되고, 채널 텍스트가 구체적일수록 진단이 정확해집니다.</p>
-        </div>
-
-        <details class="disclosure">
-          <summary>Live 모드로 실행 (Liner API 키)</summary>
-          <div class="disclosure-body">
-            <input id="api_key" type="password" class="field" placeholder="lin_live_..." autocomplete="off" spellcheck="false" />
-            <p class="helper">
-              입력한 키는 이번 요청에만 쓰고 <b>저장·로깅하지 않습니다.</b>
-              비워두면 서버의 <code>LINER_API_KEY</code>를 쓰고, 그것도 없으면 데모 모드로 실행합니다.
-            </p>
-          </div>
-        </details>
-
-        <button type="submit" id="run-btn" class="btn-primary">
-          <span id="run-btn-label">진단 시작</span>
-          <svg id="run-btn-icon" class="btn-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M4 10h11.4M10.8 4.6 16.2 10l-5.4 5.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-      </form>
     </div>
 
     <p class="compliance">
@@ -142,16 +146,17 @@
           <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.3" />
           <path d="M15.3 8.7 13.6 13.6 8.7 15.3 10.4 10.4z" fill="currentColor" />
         </svg>
-        <h2 class="empty-title">왼쪽에서 샘플을 누르면 바로 진단이 시작됩니다</h2>
+        <h2 class="empty-title">상권 위치와 업종만 넣으면 바로 시작됩니다</h2>
         <p class="empty-desc">
-          성수동 카페 · 서울대입구 피부과 · 산본 수제버거, 세 가지 가상 매장으로
-          상권 수요 수집부터 콘텐츠 처방까지 한 번에 확인할 수 있습니다.
+          공개 웹에서 매장 채널을 자동 수집해 <b>AI 인용 출처</b>를 분석하고,
+          정보 결핍 3개와 발행용 콘텐츠 3종, 채널 우선순위 추천을 함께 돌려드립니다.
+          가상 매장 3종은 아래 <b>빠른 예시</b>로 바로 돌려볼 수 있습니다.
         </p>
-        <ol class="empty-steps">
-          <li><span class="empty-num">01</span><div><b>Liner Search</b><i>상권 위치·업종으로 실시간 검색 수요와 경쟁 출처를 수집합니다.</i></div></li>
-          <li><span class="empty-num">02</span><div><b>Liner Search Agent</b><i>고객이 방문 전에 기대하는 정보를 인용과 함께 정리합니다.</i></div></li>
-          <li><span class="empty-num">03</span><div><b>Liner Router</b><i>채널 텍스트와 대조해 결핍 3개와 채널별 보완 콘텐츠를 생성합니다.</i></div></li>
-        </ol>
+        <div class="empty-chips">
+          <span class="chip">인용 출처 분석</span>
+          <span class="chip">채널 우선순위</span>
+          <span class="chip">콘텐츠 3종</span>
+        </div>
       </div>
     </div>
 

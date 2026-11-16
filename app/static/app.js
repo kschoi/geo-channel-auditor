@@ -14,6 +14,9 @@
     channelText: $('#channel_text'),
     apiKey: $('#api_key'),
     charCount: $('#char-count'),
+    collectHint: $('#collect-hint'),
+    channelSummaryMeta: $('#channel-summary-meta'),
+    channelDisclosure: $('#channel-disclosure'),
     runBtn: $('#run-btn'),
     runLabel: $('#run-btn-label'),
     sampleList: $('#sample-list'),
@@ -30,9 +33,9 @@
   const state = { running: false, result: null, tab: 'instagram', activeSampleId: null, copyStore: [] };
 
   const STEP_DEFS = [
-    { title: 'Liner Search · 상권 수요 수집', detail: '상권 위치·업종으로 검색 쿼리를 만들어 실시간 수요와 경쟁 출처를 모읍니다.' },
+    { title: 'Liner Search · 상권 수요 수집', detail: '상권 위치·업종 검색과 공개 채널 자동 수집을 함께 수행합니다.' },
     { title: 'Liner Search Agent · 고객 기대 정보 분석', detail: '수집한 출처를 바탕으로 고객이 방문 전에 확인하려는 정보를 정리합니다.' },
-    { title: 'Liner Router · 결핍 진단 및 콘텐츠 처방', detail: '채널 텍스트와 상권 수요를 대조해 결핍 3개와 채널별 콘텐츠를 생성합니다.' },
+    { title: 'Liner Router · 결핍 진단 및 콘텐츠 처방', detail: '채널 텍스트·인용 비중을 대조해 결핍 3개와 채널 우선순위, 콘텐츠를 생성합니다.' },
   ];
 
   const CHANNEL_LABEL = { instagram: 'Instagram', naver_place: 'Naver Place', blog_faq: 'Blog FAQ' };
@@ -43,6 +46,8 @@
     'chat.completions': 'Router',
     'credits.balance': 'Credits',
   };
+  /* 인용 채널 비중 바 색 — 1순위는 포인트 컬러, 나머지는 절제된 그레이 스케일 */
+  const CITE_COLORS = ['#059669', '#111827', '#4b5563', '#9ca3af', '#d1d5db'];
 
   /* ------------------------------------------------------------------ */
   /* 유틸                                                               */
@@ -54,6 +59,7 @@
   const scoreBar = (score) => (score >= 70 ? 'bar-good' : score >= 50 ? 'bar-mid' : 'bar-low');
   const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
   const fmtDate = (value) => String(value || '').replace('T', ' ').slice(0, 16);
+  const fmtPct = (value) => (Number(value) || 0).toFixed(1);
 
   function channelTextOf(sample) {
     const labels = { instagram: '[Instagram]', naver_place: '[Naver Place]', blog: '[Blog]' };
@@ -66,13 +72,29 @@
   /* ------------------------------------------------------------------ */
   /* 입력                                                               */
   /* ------------------------------------------------------------------ */
-  function syncCharCount() {
-    els.charCount.textContent = (els.channelText.value || '').length.toLocaleString('ko-KR');
+  const CHANNEL_MIN_CHARS = 80;
+
+  function syncChannelMeta() {
+    const length = (els.channelText.value || '').trim().length;
+    els.charCount.textContent = length.toLocaleString('ko-KR');
+    if (length >= CHANNEL_MIN_CHARS) {
+      els.collectHint.textContent = '직접 입력한 채널 문구로 진단합니다';
+      els.collectHint.classList.remove('is-empty');
+      els.channelSummaryMeta.textContent = '직접 입력';
+    } else if (length > 0) {
+      els.collectHint.textContent = '입력 문구가 짧아 공개 채널 자동 수집을 함께 사용합니다';
+      els.collectHint.classList.remove('is-empty');
+      els.channelSummaryMeta.textContent = '직접 + 자동';
+    } else {
+      els.collectHint.textContent = '매장명·상권 위치만으로 실행됩니다 · 공개 채널 자동 수집';
+      els.collectHint.classList.add('is-empty');
+      els.channelSummaryMeta.textContent = '자동 수집';
+    }
   }
 
   function setActiveSample(id) {
     state.activeSampleId = id;
-    $$('.sample-btn', els.sampleList).forEach((btn) => {
+    $$('.sample-chip', els.sampleList).forEach((btn) => {
       btn.setAttribute('aria-pressed', String(btn.dataset.sampleId === id));
     });
   }
@@ -83,7 +105,7 @@
     els.storeName.value = sample.store_name || '';
     els.channelText.value = channelTextOf(sample);
     setActiveSample(sample.id);
-    syncCharCount();
+    syncChannelMeta();
   }
 
   function setRunning(running) {
@@ -91,7 +113,7 @@
     els.runBtn.disabled = running;
     els.runBtn.classList.toggle('is-loading', running);
     els.runLabel.textContent = running ? '진단 중' : '진단 시작';
-    $$('.sample-btn', els.sampleList).forEach((btn) => { btn.disabled = running; });
+    $$('.sample-chip', els.sampleList).forEach((btn) => { btn.disabled = running; });
   }
 
   function showPanel(name) {
@@ -166,8 +188,8 @@
     els.industry.value = payload.industry ?? els.industry.value;
     if (payload.channel_text != null) {
       els.channelText.value = payload.channel_text;
-      syncCharCount();
     }
+    syncChannelMeta();
     renderStepList();
     showPanel('progress');
     setProgressMode('demo');
@@ -256,11 +278,15 @@
   /* ------------------------------------------------------------------ */
   function renderResult(r) {
     setHeaderBadge(r.mode, r.degraded);
-    state.tab = (r.contents?.[0]?.channel) || 'instagram';
+    const firstRecommended = (r.contents || []).find((c) => c.priority_badge);
+    state.tab = firstRecommended?.channel || r.contents?.[0]?.channel || 'instagram';
 
     els.results.innerHTML = [
       renderHeaderCard(r),
       renderWarnings(r),
+      renderCollectedChannel(r),
+      renderCitation(r),
+      renderRecommendations(r),
       renderDemand(r),
       renderGaps(r),
       renderContents(r),
@@ -275,6 +301,7 @@
 
   function renderHeaderCard(r) {
     const score = r.overall_score || 0;
+    const collected = r.collected_channel || {};
     const tiles = (r.scores || []).map((item) => `
       <div class="score-tile">
         <p class="score-tile-label">${esc(item.label)}</p>
@@ -290,6 +317,7 @@
           <div class="meta">
             ${modeBadgeHtml(r.mode, r.degraded)}
             <span class="meta-item">${esc(r.input.industry)}</span>
+            <span class="meta-item">채널 ${esc(collected.label || '직접 입력')}</span>
             <span class="meta-item">출처 ${(r.sources || []).length}건</span>
           </div>
           <h2 class="report-title">${esc(r.input.store_name)}</h2>
@@ -314,6 +342,101 @@
         <p class="note-title">참고</p>
         <ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
       </div>`;
+  }
+
+  /* 수집된 매장 채널 현황 (manual / auto / hybrid) */
+  function renderCollectedChannel(r) {
+    const collected = r.collected_channel;
+    if (!collected) return '';
+    const modeClass = collected.mode === 'manual'
+      ? 'collect-manual'
+      : collected.mode === 'hybrid' ? 'collect-hybrid' : 'collect-auto';
+    const queries = (collected.queries || [])
+      .map((query) => `<span class="chip chip-mono">${esc(query)}</span>`).join('');
+    const breakdown = (collected.breakdown || [])
+      .map((item) => `<span class="chip">${esc(item.label)} ${item.count}</span>`).join('');
+    const counts = [];
+    if (collected.source_count > 0) counts.push(`자동 수집 출처 ${collected.source_count}건`);
+    counts.push(`입력 문구 ${(collected.input_chars || 0).toLocaleString('ko-KR')}자`);
+    return `
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">수집된 매장 채널</h3>
+          <span class="collect-badge ${modeClass}">${esc(collected.label)}</span>
+        </div>
+        <p class="body-text sm">${esc(collected.summary)}</p>
+        ${queries ? `<div class="chips">${queries}</div>` : ''}
+        ${breakdown ? `<div class="chips">${breakdown}</div>` : ''}
+        <p class="fineprint">${esc(counts.join(' · '))}</p>
+      </section>`;
+  }
+
+  /* AI 인용 출처 분석 */
+  function renderCitation(r) {
+    const citation = r.citation_analysis;
+    const channels = citation?.channels || [];
+    if (!citation || !channels.length) return '';
+    const segments = channels
+      .map((channel, index) => ({ channel, color: CITE_COLORS[index % CITE_COLORS.length] }))
+      .filter((item) => item.channel.count > 0)
+      .map((item) => `<i style="width:${item.channel.share_pct}%;background:${item.color}" title="${esc(item.channel.label)} ${fmtPct(item.channel.share_pct)}%"></i>`)
+      .join('');
+    const rows = channels.map((channel, index) => {
+      const color = CITE_COLORS[index % CITE_COLORS.length];
+      const domains = (channel.domains || []).join(' · ');
+      return `
+        <li class="cite-row ${channel.count ? '' : 'is-zero'}">
+          <span class="cite-dot" style="background:${channel.count ? color : '#e5e7eb'}"></span>
+          <span class="cite-label">${esc(channel.label)}</span>
+          <span class="cite-count">${channel.count}건</span>
+          <span class="cite-pct">${fmtPct(channel.share_pct)}%</span>
+          <span class="cite-domains">${domains ? esc(domains) : '수집 없음'}</span>
+        </li>`;
+    }).join('');
+    return `
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">AI 인용 출처 분석</h3>
+          <span class="section-hint">Liner Search + Search Agent · 출처 ${citation.total}건</span>
+        </div>
+        <p class="body-text sm">${esc(citation.summary)}</p>
+        <div class="prop-bar" role="img" aria-label="채널별 인용 비중">${segments}</div>
+        <ul class="cite-list">${rows}</ul>
+      </section>`;
+  }
+
+  /* 채널 우선순위 추천 */
+  function renderRecommendations(r) {
+    const recommendations = r.recommended_channels || [];
+    if (!recommendations.length) return '';
+    const [top, ...rest] = recommendations;
+    const rows = rest.map((item) => `
+      <li class="rec-row">
+        <span class="rec-num">${item.rank}</span>
+        <div class="min-w-0">
+          <div class="rec-row-head">
+            <span class="rec-row-label">${esc(item.label)}</span>
+            <span class="rec-row-share">${fmtPct(item.share_pct)}%</span>
+          </div>
+          <p class="rec-reason sm">${esc(item.reason)}</p>
+        </div>
+      </li>`).join('');
+    return `
+      <section class="card pad fade-up">
+        <div class="section-head">
+          <h3 class="section-title">채널 우선순위 추천</h3>
+          <span class="section-hint">인용 비중 · 상권 수요 기준</span>
+        </div>
+        <div class="rec-hero">
+          <div class="rec-hero-head">
+            <span class="rec-badge">1순위 추천</span>
+            <span class="rec-hero-label">${esc(top.label)}</span>
+          </div>
+          <p class="rec-metric">상권 인용 비중 ${fmtPct(top.share_pct)}% · ${top.count}건</p>
+          <p class="rec-reason">${esc(top.reason)}</p>
+        </div>
+        ${rows ? `<ul class="rec-list">${rows}</ul>` : ''}
+      </section>`;
   }
 
   function renderDemand(r) {
@@ -387,19 +510,23 @@
     const contents = r.contents || [];
     if (!contents.length) return '';
     state.copyStore = contents.map((c) => c.body || '');
+    const active = contents.some((c) => c.channel === state.tab) ? state.tab : contents[0].channel;
 
-    const tabs = contents.map((c, index) => `
+    const tabs = contents.map((c) => `
       <button class="tab" role="tab" data-tab="${esc(c.channel)}"
-        aria-selected="${index === 0 ? 'true' : 'false'}">${esc(CHANNEL_LABEL[c.channel] || c.channel)}</button>`).join('');
+        aria-selected="${c.channel === active ? 'true' : 'false'}">
+        <span>${esc(CHANNEL_LABEL[c.channel] || c.channel)}</span>
+        ${c.priority_badge ? `<span class="tab-badge">${esc(c.priority_badge)}</span>` : ''}
+      </button>`).join('');
 
-    const panels = contents.map((c, index) => `
-      <div data-panel="${esc(c.channel)}" class="${index === 0 ? '' : 'hidden'}">
+    const panels = contents.map((c) => `
+      <div data-panel="${esc(c.channel)}" class="${c.channel === active ? '' : 'hidden'}">
         <div class="panel-head-row">
           <div class="min-w-0">
             <h4 class="content-title">${esc(c.title)}</h4>
             <p class="content-summary">${esc(c.summary)}</p>
           </div>
-          <button class="copy-btn" data-copy="${index}" type="button">
+          <button class="copy-btn" data-copy="${contents.indexOf(c)}" type="button">
             <svg width="11" height="11" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <rect x="7" y="2.5" width="9.5" height="11" rx="1.6" stroke="currentColor" stroke-width="1.4" />
               <path d="M13 16.5H4.9A1.4 1.4 0 0 1 3.5 15.1V7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
@@ -407,6 +534,11 @@
             복사
           </button>
         </div>
+        ${c.priority_reason ? `
+          <p class="content-priority">
+            <span class="rec-badge sm">${esc(c.priority_badge || '추천')}</span>
+            <span>${esc(c.priority_reason)}</span>
+          </p>` : ''}
         <div class="content-area"><div class="content-text">${esc(c.body)}</div></div>
         ${c.hashtags?.length ? `<div class="tags">${c.hashtags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
         ${c.caution ? `<p class="caution"><b>주의</b> · ${esc(c.caution)}</p>` : ''}
@@ -509,6 +641,7 @@
     const panels = $$('[data-panel]', els.results);
     tabs.forEach((tab) => {
       tab.addEventListener('click', () => {
+        state.tab = tab.dataset.tab;
         tabs.forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
         panels.forEach((panel) => panel.classList.toggle('hidden', panel.dataset.panel !== tab.dataset.tab));
       });
@@ -560,12 +693,12 @@
   /* ------------------------------------------------------------------ */
   /* 이벤트 등록                                                        */
   /* ------------------------------------------------------------------ */
-  els.channelText.addEventListener('input', () => { syncCharCount(); setActiveSample(null); });
+  els.channelText.addEventListener('input', () => { syncChannelMeta(); setActiveSample(null); });
   [els.location, els.industry, els.storeName].forEach((field) => {
     field.addEventListener('input', () => setActiveSample(null));
   });
 
-  $$('.sample-btn', els.sampleList).forEach((btn) => {
+  $$('.sample-chip', els.sampleList).forEach((btn) => {
     btn.addEventListener('click', () => {
       const sample = SAMPLES.find((s) => s.id === btn.dataset.sampleId);
       if (!sample) return;
@@ -586,7 +719,9 @@
       location: els.location.value.trim(),
       industry: els.industry.value.trim(),
       store_name: els.storeName.value.trim(),
+      // 비워 보내면 서버가 공개 채널을 자동 수집한다.
       channel_text: els.channelText.value.trim(),
+      auto_collect: true,
       sample_id: state.activeSampleId || null,
     };
     const apiKey = els.apiKey.value.trim();
@@ -596,13 +731,8 @@
       els.location.focus();
       return;
     }
-    if (!payload.channel_text) {
-      showError('진단할 외부 채널 텍스트를 입력해 주세요.');
-      els.channelText.focus();
-      return;
-    }
     runAudit(payload);
   });
 
-  syncCharCount();
+  syncChannelMeta();
 })();

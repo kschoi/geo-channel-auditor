@@ -46,10 +46,13 @@ class AuditRequest(BaseModel):
     location: str = Field(default="", description="상권 위치 (예: 서울 성동구 성수동2가)")
     industry: str = Field(default="", description="업종 (예: 스페셜티 카페)")
     store_name: str = Field(default="", description="매장명(선택)")
-    channel_text: str = Field(default="", description="현재 외부 채널 텍스트")
+    channel_text: str = Field(
+        default="", description="현재 외부 채널 텍스트 (선택 · 비우면 공개 채널 자동 수집)"
+    )
     sample_id: str | None = Field(default=None, description="원클릭 샘플 ID")
     api_key: str | None = Field(default=None, repr=False, description="1회성 Liner API 키(저장·로깅하지 않음)")
     max_results: int = Field(default=8, ge=1, le=20)
+    auto_collect: bool = Field(default=True, description="channel_text가 비어 있거나 짧으면 공개 채널을 자동 수집")
 
 
 class HealthResponse(BaseModel):
@@ -113,8 +116,12 @@ async def samples() -> dict[str, Any]:
 
 @app.post("/api/audit")
 async def audit(payload: AuditRequest) -> dict[str, Any]:
-    """3단계 진단 실행. LINER_API_KEY가 없거나 호출이 실패하면 데모 데이터로 폴백한다."""
-    audit_input = AuditInput.from_payload(payload.model_dump())
+    """3단계 진단 실행.
+
+    `channel_text`는 선택 입력이다. 비우면 매장 공개 채널을 자동 수집해 진단 입력으로 쓴다.
+    LINER_API_KEY가 없거나 호출이 실패하면 데모 데이터로 폴백한다.
+    """
+    audit_input = AuditInput.from_payload(payload.model_dump(exclude_unset=True))
     try:
         return await run_audit(audit_input)
     except ValueError as exc:
@@ -133,7 +140,7 @@ async def audit_stream(payload: AuditRequest) -> StreamingResponse:
 
     이벤트: `step`(단계 시작/완료) → `result`(최종 결과) 또는 `error`.
     """
-    audit_input = AuditInput.from_payload(payload.model_dump())
+    audit_input = AuditInput.from_payload(payload.model_dump(exclude_unset=True))
 
     async def event_stream() -> AsyncIterator[str]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()

@@ -1,12 +1,15 @@
 """Geo Channel Auditor 검증.
 
 * 데모 모드: 샘플 3종 + 직접 입력 (Liner API 미호출)
+* 공개 채널 자동 수집: channel_text 없이 실행 (auto) / 짧은 문구 (hybrid) / 충분한 문구 (manual)
+* 인용 출처 분석: 수집한 출처 URL의 채널 분류와 비중, 추천 채널 폴백
 * 라이브 모드: httpx.MockTransport 로 Liner API 3종 응답을 흉내 내 실제 파싱 경로 검증
 * 폴백: 라이브 호출 실패 시 데모 데이터로 대체되는지 검증
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -14,18 +17,26 @@ import httpx
 import pytest
 
 from app import samples as sample_data
+from app.auditor import (
+    CITATION_CHANNELS,
+    build_citation_analysis,
+    build_collection_queries,
+    classify_channel,
+)
 from app.liner_client import LinerClient
 
-SEARCH_URL = "https://example.com/evidence/seongsu-parking"
-AGENT_URL = "https://example.com/evidence/seongsu-demand"
+SEARCH_URL = "https://blog.naver.com/moment_roastery/223456789"
+SEARCH_INSTA_URL = "https://www.instagram.com/p/CxDemoReel1/"
+AGENT_URL = "https://map.naver.com/p/entry/place/1234567"
+LONG_CHANNEL_TEXT = sample_data.channel_text_of(sample_data.SAMPLES[0])
 
 
 # --------------------------------------------------------------------------- #
 # 라이브 모드 모의 응답
 # --------------------------------------------------------------------------- #
 
-def _router_payload() -> dict[str, Any]:
-    return {
+def _router_payload(*, with_recommendations: bool = True) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "overall_score": 63,
         "summary": "가격과 주차 정보가 비어 있어 비교 단계에서 밀립니다.",
         "scores": [
@@ -90,9 +101,36 @@ def _router_payload() -> dict[str, Any]:
             },
         ],
     }
+    if with_recommendations:
+        payload["recommended_channels"] = [
+            {
+                "rank": 1,
+                "channel": "naver_blog",
+                "label": "네이버 블로그",
+                "reason": "네이버 블로그 인용이 66.7%로 가장 높습니다. FAQ 글로 먼저 채우세요.",
+                "priority_badge": "1순위",
+            },
+            {
+                "rank": 2,
+                "channel": "naver_place",
+                "label": "네이버 플레이스",
+                "reason": "플레이스 인용 33.3%. 가격·주차를 플레이스에 먼저 고정하세요.",
+                "priority_badge": "2순위",
+            },
+            {
+                "rank": 3,
+                "channel": "review_media",
+                "label": "리뷰·언론·기타",
+                "reason": "리뷰 채널 비중이 낮아 검증 근거 보강이 필요합니다.",
+                "priority_badge": "3순위",
+            },
+        ]
+    return payload
 
 
-def _make_transport(fail_status: int | None = None) -> httpx.MockTransport:
+def _make_transport(
+    fail_status: int | None = None, *, with_recommendations: bool = True
+) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         if fail_status is not None:
             return httpx.Response(fail_status, json={"error": "mock failure"})
@@ -103,16 +141,23 @@ def _make_transport(fail_status: int | None = None) -> httpx.MockTransport:
                 200,
                 json={
                     "requestId": "req-search-1",
-                    "totalCount": 1,
+                    "totalCount": 2,
                     "results": [
                         {
                             "title": f"검색 결과: {body['query']}",
                             "url": SEARCH_URL,
-                            "hostname": "example.com",
-                            "faviconUrl": "https://example.com/favicon.ico",
+                            "hostname": "blog.naver.com",
+                            "faviconUrl": "https://blog.naver.com/favicon.ico",
                             "description": "상권 검색 수요 근거",
                             "date": "2026-11-01",
-                        }
+                        },
+                        {
+                            "title": f"릴스: {body['query']}",
+                            "url": SEARCH_INSTA_URL,
+                            "hostname": "www.instagram.com",
+                            "description": "SNS 노출 근거",
+                            "date": "2026-11-02",
+                        },
                     ],
                 },
             )
@@ -126,7 +171,7 @@ def _make_transport(fail_status: int | None = None) -> httpx.MockTransport:
                         {
                             "title": "상권 수요 정리",
                             "url": AGENT_URL,
-                            "hostname": "example.com",
+                            "hostname": "map.naver.com",
                             "description": "수요 요약",
                             "date": "2026-11-02",
                         }
@@ -134,12 +179,13 @@ def _make_transport(fail_status: int | None = None) -> httpx.MockTransport:
                 },
             )
         if path.endswith("/chat/completions"):
+            payload = _router_payload(with_recommendations=with_recommendations)
             return httpx.Response(
                 200,
                 json={
                     "id": "req-router-1",
                     "choices": [
-                        {"message": {"role": "assistant", "content": "```json\n" + json.dumps(_router_payload()) + "\n```"}}
+                        {"message": {"role": "assistant", "content": "```json\n" + json.dumps(payload) + "\n```"}}
                     ],
                 },
             )
@@ -154,16 +200,146 @@ def _make_transport(fail_status: int | None = None) -> httpx.MockTransport:
 def mock_transport(monkeypatch: pytest.MonkeyPatch):
     """LinerClient가 실제 네트워크 대신 MockTransport를 쓰도록 바꾸는 헬퍼."""
 
-    def install(fail_status: int | None = None) -> None:
+    def install(fail_status: int | None = None, *, with_recommendations: bool = True) -> None:
         original_init = LinerClient.__init__
 
         def patched_init(self, api_key=None, **kwargs):
-            kwargs.setdefault("transport", _make_transport(fail_status=fail_status))
+            kwargs.setdefault(
+                "transport",
+                _make_transport(fail_status=fail_status, with_recommendations=with_recommendations),
+            )
             original_init(self, api_key=api_key, **kwargs)
 
         monkeypatch.setattr(LinerClient, "__init__", patched_init)
 
     return install
+
+
+# --------------------------------------------------------------------------- #
+# 인용 출처 분류 (단위)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://blog.naver.com/a/1", "naver_blog"),
+        ("https://m.blog.naver.com/a/1", "naver_blog"),
+        ("https://cafe.naver.com/abc/123", "naver_blog"),
+        ("https://post.naver.com/viewer/postView.naver?volumeNo=1", "naver_blog"),
+        ("https://place.naver.com/restaurant/123/home", "naver_place"),
+        ("https://m.place.naver.com/restaurant/123", "naver_place"),
+        ("https://map.naver.com/p/entry/place/123", "naver_place"),
+        ("https://naver.me/abc123", "naver_place"),
+        ("https://www.instagram.com/p/CxDemo/", "instagram_sns"),
+        ("https://www.threads.net/@demo/post/1", "instagram_sns"),
+        ("https://www.youtube.com/watch?v=abc", "instagram_sns"),
+        ("https://youtu.be/abc", "instagram_sns"),
+        ("https://www.tiktok.com/@demo/video/1", "instagram_sns"),
+        ("https://www.facebook.com/demo/posts/1", "instagram_sns"),
+        ("https://booking.naver.com/booking/12/bizes/123", "official_web"),
+        ("https://smartstore.naver.com/demo", "official_web"),
+        ("https://www.catchtable.net/restaurant/123", "official_web"),
+        ("https://demo.tistory.com/12", "review_media"),
+        ("https://brunch.co.kr/@demo/1", "review_media"),
+        ("https://www.diningcode.com/profile.php?rid=abc", "review_media"),
+        ("https://www.siksinhot.com/P/123", "review_media"),
+        ("https://place.map.kakao.com/123", "review_media"),
+        ("https://news.example.co.kr/article/1", "review_media"),
+        ("https://search.naver.com/search.naver?where=blog&query=%EC%84%B1%EC%88%98", "naver_blog"),
+        ("https://search.naver.com/search.naver?where=place&query=%EC%84%B1%EC%88%98", "naver_place"),
+    ],
+)
+def test_classify_channel_by_domain(url: str, expected: str) -> None:
+    assert classify_channel(url) == expected
+
+
+def test_classify_channel_prefers_declared_hint() -> None:
+    """데모 픽스처가 채널을 선언하면 도메인보다 그 값을 먼저 쓴다."""
+    assert classify_channel("https://example.com/x", "instagram_sns") == "instagram_sns"
+
+
+def test_citation_analysis_shares_sum_to_100() -> None:
+    urls = (
+        ["https://blog.naver.com/a/1", "https://blog.naver.com/a/2", "https://m.blog.naver.com/b/3"]
+        + ["https://map.naver.com/p/entry/place/1", "https://place.naver.com/restaurant/2/home"]
+        + ["https://www.instagram.com/p/x/", "https://demo.tistory.com/1"]
+    ) + ["https://blog.naver.com/a/1"]  # 중복 URL은 한 번만 센다
+    sources = [{"url": url, "hostname": url.split("/")[2]} for url in urls]
+    citation = build_citation_analysis(sources)
+
+    assert citation["total"] == 7
+    assert sum(channel["count"] for channel in citation["channels"]) == 7
+    assert round(sum(channel["share_pct"] for channel in citation["channels"]), 1) == 100.0
+    assert [channel["channel"] for channel in citation["channels"]][:2] == ["naver_blog", "naver_place"]
+    assert citation["top_channel"] == "naver_blog"
+    assert citation["top_share_pct"] == pytest.approx(42.8, abs=0.05)
+    assert citation["channels"][0]["domains"] == ["blog.naver.com", "m.blog.naver.com"]
+    assert all(channel["label"] for channel in citation["channels"])
+    assert {channel["channel"] for channel in citation["channels"]} == {key for key, _ in CITATION_CHANNELS}
+
+
+def test_citation_analysis_handles_no_sources() -> None:
+    citation = build_citation_analysis([])
+    assert citation["total"] == 0
+    assert citation["top_channel"] is None
+    assert sum(channel["share_pct"] for channel in citation["channels"]) == 0
+
+
+def test_content_badge_keeps_real_rank_when_top_channel_has_no_content() -> None:
+    """1순위가 공식 웹·리뷰처럼 만들 수 없는 채널이면 다음 채널에 실제 순위로 배지를 단다."""
+    from app.auditor import apply_content_priority
+
+    contents = [
+        {"channel": "instagram", "body": ""},
+        {"channel": "naver_place", "body": ""},
+        {"channel": "blog_faq", "body": ""},
+    ]
+    recommendations = [
+        {"rank": 1, "channel": "review_media", "content_channel": None, "reason": "리뷰 비중이 가장 큽니다."},
+        {"rank": 2, "channel": "instagram_sns", "content_channel": "instagram", "reason": "SNS 인용이 13.7%."},
+    ]
+    apply_content_priority(contents, recommendations)
+
+    assert contents[0]["priority_badge"] == "2순위 추천"
+    assert contents[0]["priority_rank"] == 2
+    assert contents[0]["priority_reason"] == "SNS 인용이 13.7%."
+    assert contents[1]["priority_badge"] == ""
+    assert contents[2]["priority_badge"] == ""
+
+
+def test_router_timeout_is_longer_than_search_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("LINER_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("LINER_ROUTER_TIMEOUT_SECONDS", "90")
+    client = LinerClient(api_key="test-key")
+    assert client.timeout == 5.0
+    assert client.router_timeout == 90.0
+
+
+def test_chat_completions_requests_router_timeout(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    monkeypatch.setenv("LINER_ROUTER_TIMEOUT_SECONDS", "90")
+    client = LinerClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    asyncio.run(client.chat_completions([{"role": "user", "content": "hi"}]))
+    timeout = seen.get("timeout") or {}
+    assert (timeout.get("read") or 0) >= 90
+
+
+def test_build_collection_queries_uses_store_and_location() -> None:
+    from app.auditor import AuditInput
+
+    audit = AuditInput(location="서울 성동구 성수동2가", industry="스페셜티 카페", store_name="모먼트 성수점")
+    queries = build_collection_queries(audit)
+    assert queries[0] == "서울 성동구 성수동2가 모먼트 성수점"
+    assert "네이버 플레이스" in queries[1]
+    assert len(queries) == 2
+
+    no_store = build_collection_queries(AuditInput(location="서울 마포구 연남동", industry="베이커리"))
+    assert no_store[0] == "서울 마포구 연남동 베이커리"
 
 
 # --------------------------------------------------------------------------- #
@@ -241,6 +417,25 @@ def test_audit_demo_all_samples(client, sample):
     assert body["sources"], "출처가 비어 있으면 안 됩니다."
     assert body["demand"]["answer"]
 
+    # 채널 텍스트를 충분히 넣었으니 자동 수집 없이 직접 입력으로 진단한다.
+    assert body["collected_channel"]["mode"] == "manual"
+    assert body["collected_channel"]["source_count"] == 0
+    assert body["collected_channel"]["label"] == "직접 입력"
+    assert body["input"]["channel_text_chars"] > 0
+
+    # 인용 출처 분석 + 채널 우선순위 추천은 항상 채워진다.
+    citation = body["citation_analysis"]
+    assert citation["total"] == len(body["sources"])
+    assert round(sum(channel["share_pct"] for channel in citation["channels"]), 1) == 100.0
+    recommendations = body["recommended_channels"]
+    assert [rec["rank"] for rec in recommendations] == [1, 2, 3]
+    assert all(rec["reason"] for rec in recommendations)
+    assert all(rec["priority_badge"].endswith("순위") for rec in recommendations)
+    # 1순위 추천 채널에 해당하는 콘텐츠 탭이 표시된다.
+    badged = [content for content in body["contents"] if content["priority_badge"]]
+    assert len(badged) == 1
+    assert badged[0]["priority_badge"] == "1순위 추천"
+
     # 결핍마다 근거 출처 링크가 붙어야 한다.
     for gap in body["gaps"]:
         assert gap["title"] and gap["reason"] and gap["demand_evidence"]
@@ -280,18 +475,63 @@ def test_audit_demo_custom_input(client):
     # 입력에 없는 정보(가격·주차 등)가 결핍으로 잡혀야 한다.
     titles = " ".join(gap["title"] for gap in body["gaps"])
     assert "가격" in titles or "주차" in titles
+    # 짧은 문구이므로 자동 수집이 붙는다.
+    assert body["collected_channel"]["mode"] == "hybrid"
 
 
-def test_audit_requires_input(client):
+def test_audit_auto_collects_channels_without_channel_text(client):
+    """매장명·상권 위치만으로도 진단이 돌아가고 공개 채널을 스스로 모은다."""
+    payload = {
+        "location": "서울 성동구 성수동2가",
+        "industry": "스페셜티 카페",
+        "store_name": "테스트 로스터리",
+        "channel_text": "",
+    }
+    response = client.post("/api/audit", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["degraded"] is False
+    collected = body["collected_channel"]
+    assert collected["mode"] == "auto"
+    assert collected["label"] == "자동 수집"
+    assert collected["auto"] is True
+    assert collected["source_count"] > 0
+    assert collected["queries"] and len(collected["queries"]) == 2
+    assert collected["summary"]
+    assert collected["input_chars"] == 0
+    assert collected["sources"], "자동 수집 출처가 응답에 포함되어야 합니다."
+    assert all(source["origin"] == "collect" for source in collected["sources"])
+
+    # 자동 수집분이 인용 분석과 파이프라인에 반영된다.
+    assert body["citation_analysis"]["total"] >= collected["source_count"] - 1
+    totals = body["pipeline"]["totals"]
+    assert totals["search.web"] == len(body["queries"]) + len(collected["queries"]) == 5
+    assert body["pipeline"]["steps"][0]["counts"]["collected"] > 0
+    assert len(body["recommended_channels"]) == 3
+    assert body["contents"][0]["channel"] or body["contents"][1]["channel"]
+
+
+def test_audit_can_disable_auto_collect(client):
+    payload = {
+        "location": "서울 성동구 성수동2가",
+        "industry": "스페셜티 카페",
+        "channel_text": "",
+        "auto_collect": False,
+    }
+    response = client.post("/api/audit", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["collected_channel"]["mode"] == "manual"
+    assert body["collected_channel"]["auto"] is False
+    assert body["collected_channel"]["source_count"] == 0
+    assert body["pipeline"]["totals"]["search.web"] == 3
+
+
+def test_audit_requires_location_and_industry(client):
     response = client.post("/api/audit", json={"location": "", "industry": "", "channel_text": ""})
     assert response.status_code == 400
     assert "입력" in response.json()["detail"]
-
-    response = client.post(
-        "/api/audit",
-        json={"location": "서울 성동구", "industry": "카페", "channel_text": ""},
-    )
-    assert response.status_code == 400
 
 
 def test_audit_stream_emits_steps_and_result(client):
@@ -310,6 +550,20 @@ def test_audit_stream_emits_steps_and_result(client):
     result = json.loads(result_line[5:])
     assert result["overall_score"] >= 0
     assert len(result["gaps"]) == 3
+    assert len(result["recommended_channels"]) == 3
+
+
+def test_audit_stream_auto_collect_emits_extra_step_detail(client):
+    with client.stream(
+        "POST", "/api/audit/stream", json={"location": "서울 마포구 연남동", "industry": "베이커리"}
+    ) as response:
+        assert response.status_code == 200
+        text = "".join(response.iter_text())
+
+    result_line = [line for line in text.splitlines() if line.startswith("data:")][-1]
+    result = json.loads(result_line[5:])
+    assert result["collected_channel"]["mode"] == "auto"
+    assert "자동 수집" in text
 
 
 # --------------------------------------------------------------------------- #
@@ -324,7 +578,7 @@ def test_audit_live_mode_uses_liner_api(client, monkeypatch, mock_transport):
         "sample_id": "seongsu-cafe",
         "location": "서울 성동구 성수동2가",
         "industry": "스페셜티 카페",
-        "channel_text": sample_data.channel_text_of(sample_data.SAMPLES[0]),
+        "channel_text": LONG_CHANNEL_TEXT,
     }
     response = client.post("/api/audit", json=payload)
     assert response.status_code == 200, response.text
@@ -343,8 +597,101 @@ def test_audit_live_mode_uses_liner_api(client, monkeypatch, mock_transport):
     assert body["gaps"][0]["sources"][0]["url"] == SEARCH_URL
     assert body["pipeline"]["calls"][0]["request_id"] == "req-search-1"
 
+    # 인용 출처 분석은 실제 수집 URL의 도메인으로 계산된다.
+    citation = body["citation_analysis"]
+    assert citation["total"] == len(body["sources"])
+    assert citation["top_channel"] == "naver_blog"
+    assert {channel["channel"] for channel in citation["channels"] if channel["count"]} == {
+        "naver_blog",
+        "naver_place",
+        "instagram_sns",
+    }
+    # Router가 준 추천이 그대로 반영된다.
+    assert [rec["channel"] for rec in body["recommended_channels"]] == [
+        "naver_blog",
+        "naver_place",
+        "review_media",
+    ]
+    assert all(rec["source"] == "router" for rec in body["recommended_channels"])
+    assert "66.7%" in body["recommended_channels"][0]["reason"]
+    # 1순위 추천(network blog) → blog_faq 콘텐츠에 배지
+    blog = next(content for content in body["contents"] if content["channel"] == "blog_faq")
+    assert blog["priority_badge"] == "1순위 추천"
+    assert blog["priority_rank"] == 1
+
     # 요청에 넣은 API 키는 응답 어디에도 나타나지 않아야 한다.
     assert "test-key-do-not-leak" not in response.text
+
+
+def test_audit_live_auto_collect_adds_two_searches(client, monkeypatch, mock_transport):
+    """channel_text 없이 호출하면 라이브에서도 공개 채널 수집 검색 2회가 추가된다."""
+    monkeypatch.setenv("LINER_API_KEY", "test-key-do-not-leak")
+    mock_transport()
+
+    response = client.post(
+        "/api/audit",
+        json={"location": "서울 성동구 성수동2가", "industry": "스페셜티 카페", "store_name": "테스트 로스터리"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["mode"] == "live"
+    assert body["degraded"] is False
+    collected = body["collected_channel"]
+    assert collected["mode"] == "auto"
+    assert collected["queries"]
+    totals = body["pipeline"]["totals"]
+    assert totals["search.web"] == 5
+    assert totals["total"] == 7
+    assert totals["live"] == 7
+    assert collected["source_count"] == 2  # 모의 응답의 서로 다른 URL 2건
+    collect_calls = [call for call in body["pipeline"]["calls"] if (call["detail"] or "").startswith("collect")]
+    assert len(collect_calls) == 2
+    assert len(body["recommended_channels"]) == 3
+
+
+def test_audit_live_hybrid_when_channel_text_is_short(client, monkeypatch, mock_transport):
+    monkeypatch.setenv("LINER_API_KEY", "test-key-do-not-leak")
+    mock_transport()
+
+    response = client.post(
+        "/api/audit",
+        json={
+            "location": "서울 성동구 성수동2가",
+            "industry": "스페셜티 카페",
+            "channel_text": "성수동 로스터리 카페입니다.",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["collected_channel"]["mode"] == "hybrid"
+    assert body["collected_channel"]["input_chars"] > 0
+    assert body["pipeline"]["totals"]["search.web"] == 5
+
+
+def test_recommendations_fallback_when_router_omits(client, monkeypatch, mock_transport):
+    """Router가 추천을 빠뜨려도 인용 비중 기반 결정론적 추천으로 채운다."""
+    monkeypatch.setenv("LINER_API_KEY", "test-key-do-not-leak")
+    mock_transport(with_recommendations=False)
+
+    response = client.post(
+        "/api/audit",
+        json={
+            "location": "서울 성동구 성수동2가",
+            "industry": "스페셜티 카페",
+            "channel_text": LONG_CHANNEL_TEXT,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    recommendations = body["recommended_channels"]
+    assert len(recommendations) == 3
+    assert [rec["rank"] for rec in recommendations] == [1, 2, 3]
+    assert all(rec["source"] == "citation" for rec in recommendations)
+    assert recommendations[0]["channel"] == body["citation_analysis"]["top_channel"]
+    assert all(rec["priority_badge"] == f"{rec['rank']}순위" for rec in recommendations)
+    assert all(str(rec["share_pct"]) in rec["reason"] for rec in recommendations)
 
 
 def test_audit_live_mode_falls_back_to_demo_on_api_error(client, monkeypatch, mock_transport):
@@ -364,6 +711,7 @@ def test_audit_live_mode_falls_back_to_demo_on_api_error(client, monkeypatch, mo
     assert any("실패" in w for w in body["warnings"])
     assert len(body["gaps"]) == 3
     assert len(body["contents"]) == 3
+    assert len(body["recommended_channels"]) == 3
 
 
 def test_request_api_key_is_not_echoed(client, mock_transport):

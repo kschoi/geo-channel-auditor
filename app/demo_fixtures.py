@@ -20,23 +20,61 @@ from urllib.parse import quote
 
 _FAVICON = "https://www.google.com/s2/favicons?domain={host}&sz=64"
 
+# 데모 출처가 "어느 채널에서 인용되는지"를 결정하는 가중 순서.
+# 실제 상권 검색 상위 결과처럼 네이버 블로그 비중이 가장 높게 잡혀 있다.
+_DEMO_CHANNEL_CYCLE = [
+    "naver_blog",
+    "naver_blog",
+    "naver_place",
+    "naver_blog",
+    "instagram_sns",
+    "review_media",
+    "naver_blog",
+    "naver_place",
+]
+
+# 채널별 대표 URL 형식. 모두 실제로 열리는 검색/목록 페이지이며, 호스트가 채널 분류와 일치한다.
+# `src`는 같은 채널·같은 쿼리라도 검색엔진별로 URL을 구분해 중복 제거에 걸리지 않게 하는 표식이다.
+_DEMO_CHANNEL_URLS: dict[str, str] = {
+    "naver_blog": "https://search.naver.com/search.naver?where=blog&query={q}&src={src}",
+    "naver_place": "https://map.naver.com/p/search/{q}?src={src}",
+    "instagram_sns": "https://www.instagram.com/explore/search/keyword/?q={q}&src={src}",
+    "official_web": "https://www.catchtable.net/search?keyword={q}&src={src}",
+    "review_media": "https://search.daum.net/search?w=tot&q={q}&src={src}",
+}
+
+_DEMO_CHANNEL_HOSTS: dict[str, str] = {
+    "naver_blog": "search.naver.com",
+    "naver_place": "map.naver.com",
+    "instagram_sns": "www.instagram.com",
+    "official_web": "www.catchtable.net",
+    "review_media": "search.daum.net",
+}
+
+
+def _demo_channel(kind: str, query: str) -> str:
+    """(검색엔진 종류, 쿼리)로 채널을 결정적으로 고른다. 프로세스마다 같은 값이 나온다."""
+    offset = {"naver": 0, "google": 3, "daum": 5}.get(kind, 0)
+    seed = sum(ord(char) for char in query) + offset
+    return _DEMO_CHANNEL_CYCLE[seed % len(_DEMO_CHANNEL_CYCLE)]
+
 
 def _source(kind: str, query: str, title: str, description: str, date: str) -> dict[str, Any]:
-    """데모용 검색 출처 1건을 만든다. URL은 실제 검색 결과 페이지다."""
-    if kind == "naver":
-        url, host = f"https://search.naver.com/search.naver?query={quote(query)}", "search.naver.com"
-    elif kind == "google":
-        url, host = f"https://www.google.com/search?q={quote(query)}", "www.google.com"
-    else:
-        url, host = f"https://search.daum.net/search?q={quote(query)}", "search.daum.net"
+    """데모용 검색 출처 1건을 만든다.
+
+    URL은 실제로 열리는 채널별 검색 페이지이고, `channel`은 데모 픽스처가 선언한 인용 채널이다.
+    """
+    channel = _demo_channel(kind, query)
+    host = _DEMO_CHANNEL_HOSTS[channel]
     return {
         "title": f"[데모] {title}",
-        "url": url,
+        "url": _DEMO_CHANNEL_URLS[channel].format(q=quote(query), src=kind),
         "hostname": host,
         "faviconUrl": _FAVICON.format(host=host),
         "description": description,
         "date": date,
         "demo": True,
+        "channel": channel,
     }
 
 
