@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -89,6 +90,151 @@ STEP_TITLES = [
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
+# --------------------------------------------------------------------------- #
+# 단일 검색창 입력 파서
+#
+# 사용자는 이제 "성수동 모먼트 카페"처럼 한 줄만 쓴다. 이 블록은 그 한 줄에서
+# 상권 위치·업종·매장명을 나눠 기존 3단계 파이프라인이 그대로 쓸 수 있게 한다.
+# 사전·접미사 규칙으로 못 나누면(모호한 입력) 위치=원문, 업종="로컬 매장",
+# 매장명=원문으로 안전하게 폴백해 검색 품질이 떨어지는 것을 막는다.
+# --------------------------------------------------------------------------- #
+
+FALLBACK_INDUSTRY = "로컬 매장"
+
+_QUERY_SEPARATORS = re.compile(r"[\s,·/|]+")
+
+def _wordset(block: str) -> frozenset[str]:
+    """공백으로 구분된 단어 목록을 집합으로 만든다(사전 상수 정의용)."""
+    return frozenset(block.split())
+
+
+# 행정구역·도시 이름 — 토큰 자체가 위치다.
+_LOCATION_CITIES = _wordset(
+    """
+    서울 부산 대구 인천 광주 대전 울산 세종 경기 강원 충북 충남 전북 전남 경북 경남 제주
+    수원 성남 고양 용인 부천 안산 안양 군포 시흥 평택 의정부 광명 하남 김포 파주 이천 오산
+    구리 남양주 의왕 과천 여주 동두천 안성 포천 양주 청주 충주 천안 아산 전주 익산 군산 목포
+    순천 여수 창원 김해 양산 진주 통영 포항 경주 구미 안동 원주 춘천 강릉 속초 제천
+    """
+)
+
+# 접미사 없이도 통하는 대표 상권 이름.
+_LOCATION_AREAS = _wordset(
+    """
+    홍대 건대 강남 신촌 이대 이태원 성수 연남 망원 한남 삼청 가로수길 신사 압구정 청담 논현
+    판교 분당 일산 해운대 서면 광안리 대학로 종로 명동 을지로 여의도 반포 잠실 송파 목동 사당
+    노원 왕십리 교대 서초 양재 구로 영등포 마포 합정 상수 공덕 용산 한강진 경리단 북촌 삼성
+    선릉 역삼 잠원 서래마을 문래 당산 응암 불광 은평 수유 미아 창동 방배 흑석 동작 노량진
+    신림 봉천 서울대입구 강변 건대입구 구의 자양 화양 성내 천호 강동 둔촌 강일 위례 미사
+    운정 동탄 수지 죽전 야탑 정자 서현 광교 영통 매탄 권선 인계 금정 범계 평촌 산본 대야미
+    원효로 용리단길 백석 정발산 주엽 대화 마두 행신 화정 능곡 토당 곡산 흥도 고양시청
+    """
+)
+
+# 위치 접미사 — "성수동", "강남역", "성수동2가", "서울대입구" 같은 형태를 잡는다.
+# "리"는 "베이커리·로스터리" 같은 업종어를 잘못 집어 제외한다(상권 이름은 사전에 넣는다).
+_LOCATION_SUFFIXES = ("동", "가", "역", "로", "길", "구", "시", "군", "읍", "면", "타워", "몰", "백화점")
+
+# 번지수만 있는 토큰(예: "315-12")도 위치의 일부로 본다.
+_ADDRESS_NUMBER = re.compile(r"^\d{1,4}(-\d{1,4})?(번지|호)?$")
+
+# 업종 키워드 — 토큰이 이 키워드를 포함하면 업종으로 본다(업종 표기는 사용자 표현 유지).
+_INDUSTRY_KEYWORDS = _wordset(
+    """
+    카페 커피 로스터리 디저트 베이커리 제과 빵집 빵 케이크 도넛 마카롱 아이스크림 젤라또
+    버거 햄버거 피자 치킨 파스타 스테이크 고기 삼겹살 갈비 곱창 순대 국밥 칼국수 냉면 분식
+    김밥 떡볶이 초밥 스시 일식 중식 한식 양식 식당 맛집 밥집 뷔페 샐러드 포케 브런치 주점
+    호프 이자카야 와인바 칵테일 네일 헤어 미용실 미용 바버샵 피부과 피부 성형외과 치과 한의원
+    정형외과 안과 내과 소아과 이비인후과 산부인과 비뇨기과 의원 병원 클리닉 약국 필라테스
+    요가 헬스 크로스핏 수영장 골프 학원 교습소 과외 독서실 세탁 세탁소 편의점 마트 슈퍼 정육
+    청과 꽃집 플라워 사진관 스튜디오 서점 문구 가구 인테리어 부동산 동물병원 애견 반려동물
+    호텔 모텔 펜션 게스트하우스 노래방 당구장 볼링 영화관 공방 클래스
+    """
+)
+
+
+def _is_location_token(token: str) -> bool:
+    """토큰 하나가 상권 위치(행정구역·역·상권 이름·번지)인지 판단한다."""
+    compact = token.strip()
+    if not compact:
+        return False
+    if compact in _LOCATION_CITIES or compact in _LOCATION_AREAS:
+        return True
+    if _ADDRESS_NUMBER.match(compact):
+        return True
+    core = compact.rstrip("0123456789")
+    return any(core.endswith(suffix) and len(core) > len(suffix) for suffix in _LOCATION_SUFFIXES)
+
+
+def _industry_token_of(token: str) -> str:
+    """토큰이 업종 키워드를 포함하면 그 업종 표기를 돌려준다."""
+    compact = token.strip()
+    if len(compact) < 2:
+        return ""
+    for keyword in sorted(_INDUSTRY_KEYWORDS, key=len, reverse=True):
+        if keyword in compact:
+            return compact
+    return ""
+
+
+def parse_search_query(query: str) -> dict[str, Any]:
+    """한 줄 검색어를 `location` / `industry` / `store_name`으로 나눈다.
+
+    예) "성수동 모먼트 카페"   → location=성수동,        industry=카페,   store_name=모먼트
+        "서울대입구 브라이트 피부과" → location=서울대입구, industry=피부과, store_name=브라이트
+        "강남역 네일샵"        → location=강남역,       industry=네일샵, store_name=""
+        "브라이트"             → 모호한 입력: 위치=원문, 업종=로컬 매장, 매장명=원문
+    """
+    raw = str(query or "").strip()
+    if not raw:
+        return {
+            "query": "",
+            "location": "",
+            "industry": "",
+            "store_name": "",
+            "location_matched": False,
+            "industry_matched": False,
+        }
+
+    tokens = [token for token in _QUERY_SEPARATORS.split(raw) if token]
+    location_parts: list[str] = []
+    industry = ""
+    store_parts: list[str] = []
+    for token in tokens:
+        # 1) 사전에 있는 상권 이름  2) 업종 키워드  3) 위치 접미사·번지  4) 나머지=매장명
+        known_area = token in _LOCATION_CITIES or token in _LOCATION_AREAS
+        if known_area:
+            location_parts.append(token)
+        elif _industry_token_of(token) and not industry:
+            industry = token
+        elif _is_location_token(token):
+            location_parts.append(token)
+        else:
+            store_parts.append(token)
+
+    location = " ".join(location_parts)
+    store_name = " ".join(store_parts)
+
+    if not location and not industry:
+        # 어느 규칙에도 걸리지 않는 입력 — 원문을 그대로 위치·매장명으로 쓰고 업종만 일반화한다.
+        return {
+            "query": raw,
+            "location": raw,
+            "industry": FALLBACK_INDUSTRY,
+            "store_name": raw,
+            "location_matched": False,
+            "industry_matched": False,
+        }
+
+    return {
+        "query": raw,
+        "location": location,
+        "industry": industry or FALLBACK_INDUSTRY,
+        "store_name": store_name,
+        "location_matched": bool(location),
+        "industry_matched": bool(industry),
+    }
+
 
 @dataclass
 class AuditInput:
@@ -100,9 +246,13 @@ class AuditInput:
     api_key: str | None = None
     max_results: int = 8
     auto_collect: bool = True
+    query: str = ""
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> AuditInput:
+        query = str(payload.get("query") or "").strip()
+        # 단일 검색창 입력은 위치·업종이 비었을 때만 채운다. 직접 지정한 값이 항상 우선한다.
+        parsed = parse_search_query(query) if query else {}
         sample = sample_data.get_sample(payload.get("sample_id") or "")
         if sample:
             # 채널 텍스트를 명시하지 않은 경우에만 샘플 원문을 쓴다. 빈 문자열로 보내면 "자동 수집" 의도다.
@@ -119,16 +269,18 @@ class AuditInput:
                 api_key=payload.get("api_key"),
                 max_results=int(payload.get("max_results") or 8),
                 auto_collect=bool(payload.get("auto_collect", True)),
+                query=query or sample["store_name"],
             )
         return cls(
-            location=str(payload.get("location") or "").strip(),
-            industry=str(payload.get("industry") or "").strip(),
-            store_name=str(payload.get("store_name") or "").strip(),
+            location=str(payload.get("location") or "").strip() or parsed.get("location", ""),
+            industry=str(payload.get("industry") or "").strip() or parsed.get("industry", ""),
+            store_name=str(payload.get("store_name") or "").strip() or parsed.get("store_name", ""),
             channel_text=str(payload.get("channel_text") or "").strip(),
             sample_id=None,
             api_key=payload.get("api_key"),
             max_results=int(payload.get("max_results") or 8),
             auto_collect=bool(payload.get("auto_collect", True)),
+            query=query,
         )
 
     @property
@@ -136,12 +288,30 @@ class AuditInput:
         return self.store_name or f"{self.location} {self.industry}".strip()
 
 
-def build_queries(location: str, industry: str, sample_id: str | None = None) -> list[str]:
-    """상권 + 업종으로 검색 쿼리 3개를 만든다. 샘플은 상권 맞춤 쿼리를 쓴다."""
+def _unique_join(*parts: str) -> str:
+    """여러 문자열을 토큰 단위로 합치되 같은 토큰은 한 번만 남긴다."""
+    tokens: list[str] = []
+    for part in parts:
+        for token in str(part or "").split():
+            if token not in tokens:
+                tokens.append(token)
+    return " ".join(tokens)
+
+
+def build_queries(
+    location: str,
+    industry: str,
+    sample_id: str | None = None,
+    *,
+    query: str = "",
+    store_name: str = "",
+) -> list[str]:
+    """상권 + 업종(또는 단일 검색어)으로 검색 쿼리 3개를 만든다. 샘플은 상권 맞춤 쿼리를 쓴다."""
     sample = sample_data.get_sample(sample_id or "")
     if sample:
         return list(sample["queries"])
-    base = " ".join(part for part in (location, industry) if part).strip()
+    # 사용자가 쓴 한 줄이 가장 자연스러운 검색어다. 없으면 나눠진 필드로 재구성한다.
+    base = str(query or "").strip() or _unique_join(location, store_name, industry)
     return [
         f"{base} 주차 운영시간 예약",
         f"{base} 가격 메뉴 후기",
@@ -649,16 +819,12 @@ def apply_content_priority(contents: list[dict[str, Any]], recommendations: list
 
 def build_collection_queries(audit: AuditInput) -> list[str]:
     """매장명·위치·업종만으로 공개 채널 노출 현황을 찾는 검색 쿼리 2개."""
-    first = " ".join(part for part in (audit.location, audit.store_name or audit.industry) if part).strip()
-    second = " ".join(
-        part
-        for part in (
-            audit.store_name or audit.location,
-            audit.industry,
-            "네이버 플레이스 인스타그램 블로그",
-        )
-        if part
-    ).strip()
+    first = _unique_join(audit.location, audit.store_name or audit.industry)
+    second = _unique_join(
+        audit.store_name or audit.location,
+        audit.industry,
+        "네이버 플레이스 인스타그램 블로그",
+    )
     queries: list[str] = []
     for query in (first, second):
         if query and query not in queries:
@@ -821,7 +987,7 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
     """3단계 진단을 실행하고 UI가 그대로 렌더링할 수 있는 결과 dict를 돌려준다."""
     started = time.perf_counter()
     if not audit.location and not audit.industry:
-        raise ValueError("상권 위치와 업종을 입력해 주세요.")
+        raise ValueError("매장 이름이나 동네·업종을 입력해 주세요.")
 
     client = LinerClient(api_key=audit.api_key)
     live = client.live
@@ -836,7 +1002,9 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         else []
     )
 
-    queries = build_queries(audit.location, audit.industry, audit.sample_id)
+    queries = build_queries(
+        audit.location, audit.industry, audit.sample_id, query=audit.query, store_name=audit.store_name
+    )
     demo_payload: dict[str, Any] | None = None
     if using_demo:
         demo_payload = _demo_payload(audit, queries)
@@ -1137,6 +1305,7 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         "warnings": warnings,
         "generated_at": datetime.now(KST).isoformat(timespec="seconds"),
         "input": {
+            "query": audit.query,
             "store_name": audit.display_name,
             "location": audit.location,
             "industry": audit.industry,

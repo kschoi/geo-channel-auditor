@@ -43,6 +43,10 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 class AuditRequest(BaseModel):
+    query: str = Field(
+        default="",
+        description="단일 검색어 (예: 성수동 모먼트 카페, 강남역 피부과). 비우면 location·industry를 직접 받는다.",
+    )
     location: str = Field(default="", description="상권 위치 (예: 서울 성동구 성수동2가)")
     industry: str = Field(default="", description="업종 (예: 스페셜티 카페)")
     store_name: str = Field(default="", description="매장명(선택)")
@@ -118,6 +122,7 @@ async def samples() -> dict[str, Any]:
 async def audit(payload: AuditRequest) -> dict[str, Any]:
     """3단계 진단 실행.
 
+    `query` 한 줄만으로도 실행된다(`parse_search_query`가 위치·업종·매장명을 추론).
     `channel_text`는 선택 입력이다. 비우면 매장 공개 채널을 자동 수집해 진단 입력으로 쓴다.
     LINER_API_KEY가 없거나 호출이 실패하면 데모 데이터로 폴백한다.
     """

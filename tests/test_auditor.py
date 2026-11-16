@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 import httpx
@@ -343,6 +344,76 @@ def test_build_collection_queries_uses_store_and_location() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 단일 검색창 입력 파싱
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    ("query", "location", "industry", "store_name"),
+    [
+        ("성수동 모먼트 카페", "성수동", "카페", "모먼트"),
+        ("서울대입구 브라이트 피부과", "서울대입구", "피부과", "브라이트"),
+        ("강남역 네일샵", "강남역", "네일샵", ""),
+        ("홍대 버거", "홍대", "버거", ""),
+        ("연남동 베이커리", "연남동", "베이커리", ""),
+        ("성수동, 카페", "성수동", "카페", ""),
+        ("서울 성동구 성수동2가 315-12 카페", "서울 성동구 성수동2가 315-12", "카페", ""),
+    ],
+)
+def test_parse_search_query_splits_korean_query(query, location, industry, store_name) -> None:
+    from app.auditor import parse_search_query
+
+    parsed = parse_search_query(query)
+    assert parsed["location"] == location
+    assert parsed["industry"] == industry
+    assert parsed["store_name"] == store_name
+    assert parsed["query"] == query
+
+
+def test_parse_search_query_falls_back_safely_on_ambiguous_input() -> None:
+    from app.auditor import FALLBACK_INDUSTRY, parse_search_query
+
+    parsed = parse_search_query("브라이트")
+    # 나눌 수 없으면 원문을 위치·매장명으로 두고 업종만 일반화한다(검색 품질 보존).
+    assert parsed["location"] == "브라이트"
+    assert parsed["store_name"] == "브라이트"
+    assert parsed["industry"] == FALLBACK_INDUSTRY
+    assert parsed["location_matched"] is False
+
+    empty = parse_search_query("   ")
+    assert empty["location"] == "" and empty["industry"] == "" and empty["store_name"] == ""
+
+
+def test_build_queries_uses_single_query_text() -> None:
+    from app.auditor import build_queries
+
+    queries = build_queries("성수동", "카페", None, query="성수동 모먼트 카페")
+    assert queries[0].startswith("성수동 모먼트 카페 ")
+    assert len(queries) == 3
+
+    # 필드만 준 기존 호출도 그대로 동작한다(중복 토큰은 한 번만).
+    legacy = build_queries("성수동", "카페", None, store_name="성수동")
+    assert legacy[0].startswith("성수동 카페 ")
+
+    sample_queries = build_queries("성수동", "카페", sample_data.SAMPLES[0]["id"])
+    assert sample_queries == sample_data.SAMPLES[0]["queries"]
+
+
+def test_audit_input_prefers_explicit_fields_over_query() -> None:
+    from app.auditor import AuditInput
+
+    audit = AuditInput.from_payload(
+        {"query": "성수동 모먼트 카페", "location": "서울 성동구 성수동2가", "industry": "스페셜티 카페"}
+    )
+    assert audit.location == "서울 성동구 성수동2가"
+    assert audit.industry == "스페셜티 카페"
+    assert audit.query == "성수동 모먼트 카페"
+
+    query_only = AuditInput.from_payload({"query": "강남역 네일샵"})
+    assert (query_only.location, query_only.industry, query_only.store_name) == ("강남역", "네일샵", "")
+    assert query_only.display_name == "강남역 네일샵"
+
+
+# --------------------------------------------------------------------------- #
 # 헬스체크 / 샘플
 # --------------------------------------------------------------------------- #
 
@@ -377,10 +448,14 @@ def test_index_page_renders(client):
     assert response.status_code == 200
     html = response.text
     assert "Geo Channel Auditor" in html
-    assert "DEMO MOCK MODE" in html or "LIVE LINER API" in html
-    assert "모먼트 로스터리 성수점" in html
-    assert "브라이트 피부과의원" in html
-    assert "버거워크 산본점" in html
+    # 첫 화면은 단일 검색창이고 모드 배지는 LIVE/DEMO 점으로 표시한다.
+    assert 'id="query"' in html
+    assert re.search(r'id="mode-label">(LIVE|DEMO)<', html)
+    # 가상 매장 3종은 예시 데이터로 템플릿에 실린다(JSON은 \uXXXX로 이스케이프된다).
+    match = re.search(r'<script id="samples-data" type="application/json">(.*?)</script>', html, re.DOTALL)
+    assert match
+    store_names = {sample["store_name"] for sample in json.loads(match.group(1))}
+    assert store_names == {"모먼트 로스터리 성수점", "브라이트 피부과의원", "버거워크 산본점"}
 
 
 # --------------------------------------------------------------------------- #
