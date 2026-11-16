@@ -23,6 +23,15 @@ from .auditor import DIMENSION_LABELS, AuditInput, run_audit
 from .liner_client import DEFAULT_MODEL, LinerAPIError, LinerClient
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+
+# .env 가 있으면 읽는다(없으면 환경변수만 사용). 키 자체는 어디에도 출력하지 않는다.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+except ImportError:  # pragma: no cover - python-dotenv 미설치 시 환경변수로만 동작
+    pass
 
 app = FastAPI(
     title="Geo Channel Auditor",

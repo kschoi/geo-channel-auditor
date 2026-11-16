@@ -41,7 +41,7 @@ uvicorn app.main:app --reload
 
 ```bash
 cp .env.example .env
-# .env 파일에 LINER_API_KEY=... 입력 (커밋되지 않음)
+# .env 파일에 LINER_API_KEY=... 입력 (커밋되지 않음, 앱 시작 시 자동으로 읽습니다)
 uv run uvicorn app.main:app --reload
 ```
 
