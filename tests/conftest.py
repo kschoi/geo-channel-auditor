@@ -15,8 +15,13 @@ if str(ROOT) not in sys.path:
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """테스트는 항상 데모 기본값에서 시작한다."""
-    monkeypatch.delenv("LINER_API_KEY", raising=False)
+    """테스트는 항상 데모 기본값에서 시작한다.
+
+    변수를 지우는 대신 빈 값으로 고정한다. `app.main`을 import할 때
+    `load_dotenv(override=False)`가 로컬 `.env`를 다시 읽어 지워진 키를 되살리기 때문에,
+    빈 값(=설정됨)으로 두어야 개발 머신에서도 데모 모드가 유지된다.
+    """
+    monkeypatch.setenv("LINER_API_KEY", "")
     monkeypatch.setenv("DEMO_LATENCY_MS", "0")
     yield
 
