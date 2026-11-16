@@ -13,9 +13,10 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from . import samples as sample_data
 from .demo_fixtures import build_generic_fixture, get_fixture
@@ -57,7 +58,7 @@ class AuditInput:
     max_results: int = 8
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "AuditInput":
+    def from_payload(cls, payload: dict[str, Any]) -> AuditInput:
         sample = sample_data.get_sample(payload.get("sample_id") or "")
         if sample:
             return cls(
@@ -139,7 +140,7 @@ _CHANNEL_ALIASES = {
 
 def _clamp_score(value: Any, default: int = 50) -> int:
     try:
-        number = int(round(float(value)))
+        number = round(float(value))
     except (TypeError, ValueError):
         return default
     return max(0, min(100, number))

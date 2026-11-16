@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -150,7 +151,8 @@ async def audit_stream(payload: AuditRequest) -> StreamingResponse:
         except asyncio.CancelledError:  # 클라이언트가 연결을 끊은 경우
             task.cancel()
             raise
-        except Exception as exc:  # pragma: no cover - 예기치 못한 오류는 사용자 메시지로
+        except Exception as exc:  # noqa: BLE001 - 예기치 못한 오류도 사용자 메시지로 변환
+            # pragma: no cover
             yield _sse("error", {"detail": f"진단 중 오류가 발생했습니다: {exc}"})
         else:
             yield _sse("result", result)
