@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +17,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import UUID4, BaseModel, Field
 
 from . import __version__
 from . import samples as sample_data
 from .auditor import DIMENSION_LABELS, AuditInput, run_audit
+from .card_images import CardImageRequest, ImageJobError, get_card_image, shutdown_card_images, start_card_image
 from .card_studio import CardRequest, generate_cards
 from .liner_client import DEFAULT_MODEL, LinerAPIError, LinerClient
 
@@ -35,10 +37,19 @@ try:
 except ImportError:  # pragma: no cover - python-dotenv 미설치 시 환경변수로만 동작
     pass
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        await shutdown_card_images()
+
+
 app = FastAPI(
     title="Geo Channel Auditor",
     description="상권 Geo 분석 기반 외부 채널 결핍 진단 · 콘텐츠 처방 (Liner .EXE-THON)",
     version=__version__,
+    lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -163,6 +174,31 @@ async def create_cards(payload: CardRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from None
     except Exception:  # noqa: BLE001 - 내부 예외에 포함될 수 있는 민감정보를 숨긴다.
         raise HTTPException(status_code=500, detail="카드뉴스를 만들지 못했어요. 잠시 후 다시 시도해 주세요.") from None
+
+
+
+@app.post("/api/card-images", status_code=202)
+async def create_card_image(payload: CardImageRequest) -> JSONResponse:
+    """사용자가 요청한 이미지 한 장을 시작한다. 같은 요청 ID로는 다시 생성하지 않는다."""
+    try:
+        result = await start_card_image(payload)
+    except ImageJobError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    except Exception:  # noqa: BLE001 - 인증 정보와 상위 응답을 외부에 노출하지 않는다.
+        raise HTTPException(status_code=500, detail="이미지 요청을 확인하지 못했어요. 같은 요청의 결과를 다시 확인해 주세요.") from None
+    return JSONResponse(status_code=202, content=result, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/card-images/{request_id}")
+async def card_image_result(request_id: UUID4) -> JSONResponse:
+    """추측하기 어려운 요청 ID로 진행 상태와 결과만 확인한다. 생성 API를 다시 호출하지 않는다."""
+    try:
+        result = await get_card_image(str(request_id))
+    except ImageJobError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail="이미지 결과를 확인하지 못했어요. 잠시 후 같은 결과를 다시 확인해 주세요.") from None
+    return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:

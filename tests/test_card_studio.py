@@ -32,9 +32,9 @@ def request_payload(**changes):
 def valid_draft():
     return {
         "cards": [
-            {"headline": "산본 디델리", "body": "라볶이 한 끼, 디델리에서 만나보세요.", "source_urls": [SOURCE_URL]},
-            {"headline": "오늘은 라볶이", "body": "메뉴와 가격은 방문 전에 확인해 주세요.", "source_urls": [SOURCE_URL]},
-            {"headline": "산본에서 만나요", "body": "영업시간은 [확인 필요]예요.", "source_urls": [SOURCE_URL]},
+            {"headline": "산본 디델리", "body": "라볶이 한 끼, 디델리에서 만나보세요.", "source_urls": [SOURCE_URL], "layout": "top_left", "visual_prompt": "실제 매장 사진을 보존하고 창가 자연광과 음식 질감을 담는다. 사진 전체를 채우고 왼쪽 위에 글자 여백을 둔다."},
+            {"headline": "오늘은 라볶이", "body": "메뉴와 가격은 방문 전에 확인해 주세요.", "source_urls": [SOURCE_URL], "layout": "top_left", "visual_prompt": "실제 매장 사진을 보존하고 창가 자연광과 음식 질감을 담는다. 사진 전체를 채우고 왼쪽 위에 글자 여백을 둔다."},
+            {"headline": "산본에서 만나요", "body": "영업시간은 [확인 필요]예요.", "source_urls": [SOURCE_URL], "layout": "top_left", "visual_prompt": "실제 매장 사진을 보존하고 창가 자연광과 음식 질감을 담는다. 사진 전체를 채우고 왼쪽 위에 글자 여백을 둔다."},
         ],
         "caption": "산본 디델리에서 만나요. 방문 전 운영 정보를 확인해 주세요. #산본 #디델리",
         "warnings": [],
@@ -87,7 +87,8 @@ def test_cards_are_three_editable_copy_blocks_with_real_source_links(router):
     assert SOURCE_URL in user_message
     assert "라볶이를 소개합니다." in user_message
     assert request_payload().context not in user_message
-    assert "한국어 JSON으로 작성" in user_message
+    assert "제목·본문·캡션은 한국어로 작성" in user_message
+    assert "영어 이미지 연출안" in user_message
     assert SECRET not in json.dumps(result)
     assert SECRET not in json.dumps(observed["requests"])
     system = observed["requests"][0]["messages"][0]["content"]
@@ -119,7 +120,7 @@ def test_timeout_returns_safe_explicit_error(router):
 
 
 @pytest.mark.parametrize("defect", ["two_cards", "four_cards", "empty_headline", "object_body", "long_headline",
-                                    "long_body", "long_caption", "invented_url", "empty_sources", "extra_field"])
+                                    "long_body", "long_caption", "invented_url", "empty_sources", "missing_visual", "invalid_layout", "long_visual", "extra_field"])
 def test_invalid_card_output_is_not_rendered_as_success(router, defect):
     draft = copy.deepcopy(valid_draft())
     if defect == "two_cards":
@@ -140,6 +141,12 @@ def test_invalid_card_output_is_not_rendered_as_success(router, defect):
         draft["cards"][0]["source_urls"] = ["https://not-provided.example/"]
     elif defect == "empty_sources":
         draft["cards"][0]["source_urls"] = []
+    elif defect == "missing_visual":
+        del draft["cards"][0]["visual_prompt"]
+    elif defect == "invalid_layout":
+        draft["cards"][0]["layout"] = "invented"
+    elif defect == "long_visual":
+        draft["cards"][0]["visual_prompt"] = "가" * 1801
     else:
         draft["unexpected"] = SECRET
     observed = router(draft)
