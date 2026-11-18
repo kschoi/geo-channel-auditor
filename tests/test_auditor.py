@@ -36,101 +36,16 @@ LONG_CHANNEL_TEXT = sample_data.channel_text_of(sample_data.DEMO_SAMPLES[0])
 # 라이브 모드 모의 응답
 # --------------------------------------------------------------------------- #
 
-def _router_payload(*, with_recommendations: bool = True) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "overall_score": 63,
-        "summary": "가격과 주차 정보가 비어 있어 비교 단계에서 밀립니다.",
-        "scores": [
-            {"key": "visit_convenience", "label": "방문편의", "score": 55, "comment": "주차 안내가 없습니다."},
-            {"key": "price_transparency", "label": "가격투명성", "score": 40, "comment": "가격표가 없습니다."},
-            {"key": "differentiation", "label": "차별화", "score": 78, "comment": "로스팅 서사가 있습니다."},
-            {"key": "trust_evidence", "label": "신뢰근거", "score": 62, "comment": "후기 링크가 없습니다."},
-        ],
-        "gaps": [
-            {
-                "title": "주차 정보 부재",
-                "severity": "high",
-                "dimension": "visit_convenience",
-                "reason": "주차 안내가 없습니다.",
-                "demand_evidence": "'성수동 카페 주차' 검색이 반복됩니다.",
-                "source_urls": [SEARCH_URL],
-                "fix_hint": "주차 3줄을 소개 첫 문단에 넣으세요.",
-            },
-            {
-                "title": "가격 정보 부재",
-                "severity": "high",
-                "dimension": "price_transparency",
-                "reason": "가격표가 없습니다.",
-                "demand_evidence": "가격 비교 글이 상위에 노출됩니다.",
-                "source_urls": [AGENT_URL],
-                "fix_hint": "대표 메뉴 가격을 공개하세요.",
-            },
-            {
-                "title": "좌석 정보 부재",
-                "severity": "medium",
-                "dimension": "visit_convenience",
-                "reason": "좌석·콘센트 안내가 없습니다.",
-                "demand_evidence": "노트북 카페 질의가 있습니다.",
-                "source_urls": [SEARCH_URL, AGENT_URL],
-                "fix_hint": "좌석 수를 숫자로 적으세요.",
-            },
-        ],
-        "contents": [
-            {
-                "channel": "instagram",
-                "title": "주차부터 가격까지",
-                "summary": "카드뉴스 5장",
-                "body": "1장 표지\n2장 주차\n3장 가격\n4장 좌석\n5장 안내",
-                "hashtags": ["#성수동카페"],
-                "caution": "",
-            },
-            {
-                "channel": "naver_place",
-                "title": "방문 전 확인 안내",
-                "summary": "플레이스 새소식",
-                "body": "주차·가격·좌석 안내 본문",
-                "hashtags": [],
-                "caution": "",
-            },
-            {
-                "channel": "blog_faq",
-                "title": "자주 묻는 질문 3가지",
-                "summary": "FAQ",
-                "body": "Q1. 주차?\nA. ...\nQ2. 가격?\nA. ...",
-                "hashtags": [],
-                "caution": "의료 광고 시 심의 확인",
-            },
-        ],
-    }
-    if with_recommendations:
-        payload["recommended_channels"] = [
-            {
-                "rank": 1,
-                "channel": "naver_blog",
-                "label": "네이버 블로그",
-                "reason": "네이버 블로그 인용이 66.7%로 가장 높습니다. FAQ 글로 먼저 채우세요.",
-                "priority_badge": "1순위",
-            },
-            {
-                "rank": 2,
-                "channel": "naver_place",
-                "label": "네이버 플레이스",
-                "reason": "플레이스 인용 33.3%. 가격·주차를 플레이스에 먼저 고정하세요.",
-                "priority_badge": "2순위",
-            },
-            {
-                "rank": 3,
-                "channel": "review_media",
-                "label": "리뷰·언론·기타",
-                "reason": "리뷰 채널 비중이 낮아 검증 근거 보강이 필요합니다.",
-                "priority_badge": "3순위",
-            },
-        ]
-    return payload
+def _router_payload(*, with_observations: bool = True) -> dict[str, Any]:
+    return {"observations": [{
+        "field": "hours", "subject": "영업시간", "scope": "매일", "value": "10:00-22:00",
+        "source_id": "S1", "material_id": "summary", "quote": "영업시간 매일 10:00-22:00",
+        "qualification": "stated",
+    }] if with_observations else []}
 
 
 def _make_transport(
-    fail_status: int | None = None, *, with_recommendations: bool = True
+    fail_status: int | None = None, *, with_observations: bool = True
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         if fail_status is not None:
@@ -149,7 +64,7 @@ def _make_transport(
                             "url": SEARCH_URL,
                             "hostname": "blog.naver.com",
                             "faviconUrl": "https://blog.naver.com/favicon.ico",
-                            "description": "서울 성동구 성수동2가 모먼트 로스터리 성수점 테스트 로스터리 카페 상권 근거",
+                            "description": "서울 성동구 성수동2가 모먼트 로스터리 성수점 테스트 로스터리 카페. 영업시간 매일 10:00-22:00",
                             "date": "2026-11-01",
                         },
                         {
@@ -180,7 +95,7 @@ def _make_transport(
                 },
             )
         if path.endswith("/chat/completions"):
-            payload = _router_payload(with_recommendations=with_recommendations)
+            payload = _router_payload(with_observations=with_observations)
             return httpx.Response(
                 200,
                 json={
@@ -201,13 +116,13 @@ def _make_transport(
 def mock_transport(monkeypatch: pytest.MonkeyPatch):
     """LinerClient가 실제 네트워크 대신 MockTransport를 쓰도록 바꾸는 헬퍼."""
 
-    def install(fail_status: int | None = None, *, with_recommendations: bool = True) -> None:
+    def install(fail_status: int | None = None, *, with_observations: bool = True) -> None:
         original_init = LinerClient.__init__
 
         def patched_init(self, api_key=None, **kwargs):
             kwargs.setdefault(
                 "transport",
-                _make_transport(fail_status=fail_status, with_recommendations=with_recommendations),
+                _make_transport(fail_status=fail_status, with_observations=with_observations),
             )
             original_init(self, api_key=api_key, **kwargs)
 
@@ -230,7 +145,7 @@ def mock_transport(monkeypatch: pytest.MonkeyPatch):
         ("https://place.naver.com/restaurant/123/home", "naver_place"),
         ("https://m.place.naver.com/restaurant/123", "naver_place"),
         ("https://map.naver.com/p/entry/place/123", "naver_place"),
-        ("https://naver.me/abc123", "naver_place"),
+        ("https://naver.me/abc123", "unclassified"),
         ("https://www.instagram.com/p/CxDemo/", "instagram_sns"),
         ("https://www.threads.net/@demo/post/1", "instagram_sns"),
         ("https://www.youtube.com/watch?v=abc", "instagram_sns"),
@@ -254,9 +169,11 @@ def test_classify_channel_by_domain(url: str, expected: str) -> None:
     assert classify_channel(url) == expected
 
 
-def test_classify_channel_prefers_declared_hint() -> None:
-    """데모 픽스처가 채널을 선언하면 도메인보다 그 값을 먼저 쓴다."""
-    assert classify_channel("https://example.com/x", "instagram_sns") == "instagram_sns"
+@pytest.mark.parametrize("hint", ["instagram_sns", "official_web", "official", "naver_place"])
+def test_classify_channel_uses_domain_without_trusting_upstream_hint(hint) -> None:
+    assert classify_channel("https://example.com/x", hint) == "unclassified"
+    assert classify_channel("https://naver.me/abc123", hint) == "unclassified"
+    assert classify_channel("https://blog.naver.com/store/1", hint) == "naver_blog"
 
 
 def test_citation_analysis_shares_sum_to_100() -> None:
@@ -667,12 +584,21 @@ def test_audit_live_mode_uses_liner_api(client, monkeypatch, mock_transport):
     assert body["warnings"] == []
     assert body["pipeline"]["totals"]["live"] == 5
     assert body["pipeline"]["totals"]["demo"] == 0
-    assert [s["score"] for s in body["scores"]] == [55, 40, 78, 62]
-    assert body["overall_score"] == 63
+    assert body["scores"] == []
+    assert body["overall_score"] is None
+    assert body["computed_overall"] is None
     assert body["demand"]["answer"].startswith("고객은 주차")
-    # router JSON이 코드펜스로 감싸져 있어도 파싱되어야 한다.
-    assert body["gaps"][0]["title"] == "주차 정보 부재"
-    assert body["gaps"][0]["sources"][0]["url"] == SEARCH_URL
+    # Router JSON이 코드펜스로 감싸져 있어도 파싱되고 원문 인용이 연결되어야 한다.
+    assert len(body["evidence_review"]["fields"]) == 6
+    hours = next(item for item in body["evidence_review"]["fields"] if item["key"] == "hours")
+    assert hours["observations"][0]["quote"] == "영업시간 매일 10:00-22:00"
+    assert hours["observations"][0]["source_url"] == SEARCH_URL
+    assert body["evidence_review"]["stats"]["rejected_observations"] == 0
+    assert body["summary"] == body["evidence_review"]["summary"]
+    assert body["store_evidence"]["sources"] == body["sources"]
+    assert [source["source_id"] for source in body["sources"]] == ["S1", "S2", "S3"]
+    assert all(source["publisher_status"] == "unverified" for source in body["sources"])
+    assert "고객 수요를 측정한 결과가 아닙니다" in body["demand"]["scope"]
     assert body["pipeline"]["calls"][0]["request_id"] == "req-search-1"
 
     # 인용 출처 분석은 실제 수집 URL의 도메인으로 계산된다.
@@ -684,18 +610,10 @@ def test_audit_live_mode_uses_liner_api(client, monkeypatch, mock_transport):
         "naver_place",
         "instagram_sns",
     }
-    # Router가 준 추천이 그대로 반영된다.
-    assert [rec["channel"] for rec in body["recommended_channels"]] == [
-        "naver_blog",
-        "naver_place",
-        "review_media",
-    ]
-    assert all(rec["source"] == "router" for rec in body["recommended_channels"])
-    assert "66.7%" in body["recommended_channels"][0]["reason"]
-    # 1순위 추천(network blog) → blog_faq 콘텐츠에 배지
-    blog = next(content for content in body["contents"] if content["channel"] == "blog_faq")
-    assert blog["priority_badge"] == "1순위 추천"
-    assert blog["priority_rank"] == 1
+    # 플랫폼 URL 비중에서 개선 순위나 임의 점수를 만들지 않는다.
+    assert body["recommended_channels"] == []
+    assert body["contents"] == []
+    assert all("종합 None점" not in step["detail"] for step in body["pipeline"]["steps"])
 
     # 요청에 넣은 API 키는 응답 어디에도 나타나지 않아야 한다.
     assert "test-key-do-not-leak" not in response.text
@@ -725,7 +643,8 @@ def test_audit_live_auto_collect_adds_two_searches(client, monkeypatch, mock_tra
     assert collected["source_count"] == 2  # 모의 응답의 서로 다른 URL 2건
     collect_calls = [call for call in body["pipeline"]["calls"] if (call["detail"] or "").startswith("collect")]
     assert len(collect_calls) == 2
-    assert len(body["recommended_channels"]) == 3
+    assert body["recommended_channels"] == []
+    assert all("source_id" in source for source in collected["sources"])
 
 
 def test_audit_live_hybrid_when_channel_text_is_short(client, monkeypatch, mock_transport):
@@ -748,10 +667,10 @@ def test_audit_live_hybrid_when_channel_text_is_short(client, monkeypatch, mock_
     assert body["pipeline"]["totals"]["search.web"] == 5
 
 
-def test_recommendations_fallback_when_router_omits(client, monkeypatch, mock_transport):
-    """Router가 추천을 빠뜨려도 인용 비중 기반 결정론적 추천으로 채운다."""
+def test_no_channel_ranking_is_invented_for_empty_observations(client, monkeypatch, mock_transport):
+    """관찰이 없어도 URL 비중으로 개선 채널 순위를 만들지 않는다."""
     monkeypatch.setenv("LINER_API_KEY", "test-key-do-not-leak")
-    mock_transport(with_recommendations=False)
+    mock_transport(with_observations=False)
 
     response = client.post(
         "/api/audit",
@@ -765,13 +684,10 @@ def test_recommendations_fallback_when_router_omits(client, monkeypatch, mock_tr
     assert response.status_code == 200, response.text
     body = response.json()
 
-    recommendations = body["recommended_channels"]
-    assert len(recommendations) == 3
-    assert [rec["rank"] for rec in recommendations] == [1, 2, 3]
-    assert all(rec["source"] == "citation" for rec in recommendations)
-    assert recommendations[0]["channel"] == body["citation_analysis"]["top_channel"]
-    assert all(rec["priority_badge"] == f"{rec['rank']}순위" for rec in recommendations)
-    assert all(str(rec["share_pct"]) in rec["reason"] for rec in recommendations)
+    assert body["recommended_channels"] == []
+    assert body["overall_score"] is None
+    assert body["contents"] == []
+    assert len(body["evidence_review"]["fields"]) == 6
 
 
 def test_audit_live_failure_returns_error_without_demo(client, monkeypatch, mock_transport):

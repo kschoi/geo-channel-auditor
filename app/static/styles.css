@@ -981,3 +981,86 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px soli
 .raw-json { max-width: 100%; }
 
 .evidence-link { display:block; padding:9px 0; color:var(--blue-press); font-size:14px; text-decoration:underline; text-underline-offset:3px; }
+
+/* 근거 검토 — 매장 정보, 확인할 일, 항목별 근거 */
+.review-overview, .review-actions, .review-checklist { min-width: 0; }
+.review-kicker { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.review-store { color: var(--ink); font-size: 23px; font-weight: 750; line-height: 1.4; letter-spacing: -0.03em; }
+.review-location { margin-top: 4px; color: var(--sub); font-size: 14px; line-height: 1.6; }
+.review-meta { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 16px; font-size: 12px; color: #697786; }
+.review-meta b { color: var(--sub); font-weight: 650; }
+.review-scope { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--sub); font-size: 13px; line-height: 1.65; }
+.review-action-list { display: grid; gap: 20px; }
+.review-action { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.review-action-number {
+  display: grid; place-items: center; flex: none; width: 24px; height: 24px; margin-top: 1px;
+  border-radius: 50%; color: var(--blue-press); background: var(--blue-weak); font-size: 12px; font-weight: 750;
+}
+.review-action-body { min-width: 0; flex: 1; }
+.review-action-title { font-size: 15px; line-height: 1.5; font-weight: 700; }
+.review-action-reason { margin-top: 5px; font-size: 13px; line-height: 1.65; color: var(--sub); }
+.review-action-task { margin-top: 10px; padding: 12px 14px; background: #f8f9fb; border-radius: 12px; }
+.review-action-task > span { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 650; color: #697786; }
+.review-action-task p { font-size: 14px; line-height: 1.65; color: var(--ink); }
+.review-action-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0 12px; margin-top: 4px; }
+.review-action-footer > span { color: #697786; font-size: 12px; }
+.review-action-footer a { display: inline-flex; align-items: center; min-height: 44px; color: var(--blue-press); font-size: 13px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.review-field-list { display: grid; }
+.review-field { min-width: 0; padding: 18px 0; scroll-margin-top: 72px; }
+.review-field:first-child { padding-top: 0; }
+.review-field:last-child { padding-bottom: 0; }
+.review-field + .review-field { border-top: 1px solid var(--line); }
+.review-field:focus { outline: 2px solid #a9c6f3; outline-offset: 6px; border-radius: 6px; }
+.review-field-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.review-field-heading h3 { font-size: 15px; font-weight: 700; line-height: 1.5; }
+.review-status { flex: none; max-width: 100%; border-radius: 6px; padding: 3px 7px; font-size: 11px; font-weight: 650; line-height: 1.5; }
+.review-status-found { background: #eef7f3; color: #22634b; }
+.review-status-different { background: #fff0ef; color: #a63e36; }
+.review-status-needs_check { background: #fff5df; color: #85560e; }
+.review-status-not_found { background: #f2f4f6; color: #596675; }
+.review-field-summary { margin-top: 8px; font-size: 14px; line-height: 1.65; color: var(--sub); }
+.review-proofs { min-width: 0; margin-top: 3px; }
+.review-proofs > summary { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; color: var(--blue-press); font-size: 13px; font-weight: 600; cursor: pointer; list-style: none; }
+.review-proofs > summary::-webkit-details-marker { display: none; }
+.review-proofs > summary::after { content: ''; width: 6px; height: 6px; margin: 0 3px 3px 0; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+.review-proofs[open] > summary::after { margin-top: 4px; transform: rotate(225deg); }
+.review-proof-list { display: grid; gap: 10px; padding-bottom: 2px; }
+.review-proof { min-width: 0; padding: 14px; border-radius: 12px; background: #f8f9fb; }
+.review-proof-labels { display: flex; flex-wrap: wrap; gap: 4px 8px; color: #697786; font-size: 11px; line-height: 1.6; }
+.review-proof-caution { color: #9b5c0b; font-weight: 650; }
+.review-proof-value { margin-top: 6px; font-size: 14px; line-height: 1.6; font-weight: 650; }
+.review-proof-value > span { color: var(--sub); font-weight: 500; }
+.review-proof-quote { margin-top: 8px; border-left: 2px solid #cbd8e9; padding-left: 10px; color: var(--sub); font-size: 13px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-proof-link { display: block; width: fit-content; max-width: 100%; min-height: 44px; padding: 11px 0 9px; color: var(--blue-press); font-size: 12px; line-height: 1.7; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.review-proof-meta, .review-proof-missing { font-size: 11px; line-height: 1.7; color: #697786; overflow-wrap: anywhere; }
+.review-proof-missing { margin-top: 8px; }
+.citation-detail { min-width: 0; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.citation-detail .card-title { font-size: 14px; }
+.citation-detail .card-head { margin-bottom: 4px; }
+.citation-detail .cite-label { min-width: 0; overflow-wrap: anywhere; }
+.source-row { align-items: flex-start; min-height: 44px; }
+.source-row img { margin-top: 3px; }
+.source-title { white-space: normal; overflow-wrap: anywhere; }
+.source-meta { line-height: 1.7; overflow-wrap: anywhere; }
+.stat-row { flex-wrap: wrap; gap: 5px 14px; }
+.gap-fix { margin-top: 7px; font-size: 14px; line-height: 1.6; color: var(--sub); }
+@media (max-width: 480px) {
+  .review-store { font-size: 21px; }
+  .review-action { gap: 9px; }
+  .review-action-task { padding: 11px 12px; }
+  .review-meta { flex-direction: column; gap: 4px; }
+  .review-proof { padding: 12px; }
+  .review-status { font-size: 11px; }
+  .citation-detail .cite-row { gap: 8px; font-size: 13px; }
+}
+
+/* 접힌 상태에서도 실제 값과 적용 범위를 비교할 수 있게 한다. */
+.review-values { display: grid; gap: 7px; margin-top: 11px; }
+.review-value-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; min-width: 0; padding: 9px 11px; border-radius: 9px; background: #f8f9fb; }
+.review-value-context { color: var(--sub); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.review-value-text { color: var(--ink); font-size: 14px; font-weight: 650; line-height: 1.6; overflow-wrap: anywhere; }
+.review-value-note { color: #8a5a15; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .review-value-row { column-gap: 6px; }
+  .review-value-context { flex-basis: 100%; }
+}

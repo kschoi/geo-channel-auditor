@@ -1,16 +1,11 @@
-"""3단계 진단 파이프라인.
+"""매장 공개 자료를 수집하고 항목별 근거를 검증하는 파이프라인.
 
-1. Liner Search API       — 상권 위치 + 업종으로 검색 쿼리를 만들어 실시간 수요·경쟁 출처 수집
-                             (+ `channel_text`가 비어 있거나 짧으면 매장 공개 채널을 자동 수집)
-2. Liner Search Agent API — 상권 고객이 기대하는 정보·질문 요약 + 인용 수집
-3. Liner Router API       — 채널 텍스트와 수요를 대조해 결핍 진단 + 채널별 보완 콘텐츠 생성
+Search 검색 결과와 Search Agent의 참고 출처를 모은 뒤 Router가 원문 관찰을 추출한다.
+주소·영업시간·가격·주차·예약·메뉴 언급의 인용문 검증과 상태 판정은 서버가 수행한다.
+출처 URL의 플랫폼 비중은 자료 구성만 보여 주며 고객 수요나 개선 우선순위로 쓰지 않는다.
 
-부가 분석: Liner Search 검색 결과·자동 수집 결과와 Search Agent 인용 출처 URL을 채널(네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론)로
-분류한 `citation_analysis`와, 그 비중으로 "어느 채널부터 채울지"를 정한 `recommended_channels`를
-결과에 함께 담는다. 비중은 URL 중복 제거 후 계산하며 실제 답변 인용 빈도와 다르다. GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 별도로 수집하지는 않는다.
-
-`LINER_API_KEY`가 없거나 API 호출이 실패하면 명확한 오류를 반환한다. 가상 진단으로 대체하지 않는다.
-`GEO_AUDITOR_TEST_DEMO=1`인 오프라인 테스트에서만 가상 픽스처를 사용할 수 있다.
+API 키가 없거나 호출이 실패하면 오류를 반환한다. 이전 점수·콘텐츠 생성 경로는
+`GEO_AUDITOR_TEST_DEMO=1`인 오프라인 테스트 픽스처에서만 사용한다.
 """
 
 from __future__ import annotations
@@ -28,6 +23,12 @@ from urllib.parse import unquote, urlsplit
 
 from . import samples as sample_data
 from .demo_fixtures import build_generic_fixture, get_fixture
+from .evidence_review import (
+    EXTRACTION_SYSTEM_PROMPT,
+    build_review,
+    extraction_prompt,
+    prepare_sources,
+)
 from .liner_client import DEFAULT_MODEL, LinerAPIError, LinerClient
 
 KST = timezone(timedelta(hours=9))
@@ -48,11 +49,11 @@ CHANNEL_LABELS = {
 
 # 인용 출처 채널 분류 — UI·프롬프트·폴백이 같은 순서와 라벨을 공유한다.
 CITATION_CHANNELS: list[tuple[str, str]] = [
-    ("naver_blog", "네이버 블로그"),
+    ("naver_blog", "네이버 블로그·카페"),
     ("naver_place", "네이버 플레이스"),
     ("instagram_sns", "인스타그램·SNS"),
-    ("official_web", "공식 웹·예약"),
-    ("review_media", "리뷰·언론"),
+    ("official_web", "예약·판매 플랫폼"),
+    ("review_media", "후기·지역정보 플랫폼"),
     ("unclassified", "미분류"),
 ]
 CITATION_LABELS = dict(CITATION_CHANNELS)
@@ -61,7 +62,7 @@ CITATION_ORDER = {key: index for index, (key, _label) in enumerate(CITATION_CHAN
 # 채널 분류 기준 도메인. 호스트가 같거나 `.<도메인>`으로 끝나면 해당 채널이다.
 CITATION_DOMAINS: dict[str, tuple[str, ...]] = {
     "naver_blog": ("blog.naver.com", "cafe.naver.com", "post.naver.com"),
-    "naver_place": ("place.naver.com", "map.naver.com", "naver.me"),
+    "naver_place": ("place.naver.com", "map.naver.com"),
     "instagram_sns": ("instagram.com", "threads.net", "youtube.com", "youtu.be", "tiktok.com", "facebook.com"),
     "official_web": ("catchtable.net", "catchtable.co.kr", "booking.naver.com", "smartstore.naver.com"),
     "review_media": ("tistory.com", "brunch.co.kr", "diningcode.com", "siksinhot.com", "kakao.com"),
@@ -86,9 +87,9 @@ COLLECTED_MODE_LABELS = {
 }
 
 STEP_TITLES = [
-    "Liner Search · 상권 수요 수집",
-    "Liner Search Agent · 고객 기대 정보 분석",
-    "Liner Router · 결핍 진단 및 콘텐츠 처방",
+    "Liner Search · 매장 공개 자료 수집",
+    "Liner Search Agent · 방문 정보 참고 자료",
+    "Liner Router · 항목별 근거 확인",
 ]
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
@@ -732,12 +733,9 @@ def citation_key(raw: Any) -> str | None:
 def classify_channel(url: str, hint: str | None = None) -> str:
     """출처 URL 하나를 인용 채널로 분류한다.
 
-    `hint`(데모 픽스처가 선언한 채널)가 있으면 그것을 먼저 믿고, 없으면 호스트 도메인으로 판단한다.
-    어느 규칙에도 걸리지 않는 도메인은 `unclassified`로 둔다. 매장 공식 사이트로 추정하지 않는다.
+    호스트 도메인으로 플랫폼만 구분한다. 상위 응답의 `hint`는 운영 주체 검증이 아니므로 무시한다.
+    예약 플랫폼도 매장 공식 운영으로 단정하지 않으며 단축 링크는 `unclassified`로 둔다.
     """
-    hinted = citation_key(hint)
-    if hinted:
-        return hinted
     host = _host_of(str(url or ""))
     if not host:
         return "unclassified"
@@ -1171,7 +1169,7 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
     # ---------------- Step 1 : Liner Search (+ 공개 채널 자동 수집) ----------------
     step_started = time.perf_counter()
     await _emit(emit, type="step", index=1, status="running", title=STEP_TITLES[0],
-                detail=f"쿼리 {len(queries)}개로 상권 수요를 수집합니다.")
+                detail=f"쿼리 {len(queries)}개로 매장 공개 자료를 수집합니다.")
 
     search_bundles: list[dict[str, Any]] = []
     search_sources: list[dict[str, Any]] = []
@@ -1300,7 +1298,7 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
     # ---------------- Step 2 : Liner Search Agent ----------------
     step_started = time.perf_counter()
     await _emit(emit, type="step", index=2, status="running", title=STEP_TITLES[1],
-                detail="수집한 출처를 바탕으로 고객 기대 정보를 분석합니다.")
+                detail="방문 전에 확인할 정보와 참고 출처를 정리합니다.")
     agent_answer = ""
     agent_references: list[dict[str, Any]] = []
     if using_demo:
@@ -1313,10 +1311,13 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
             {
                 "role": "user",
                 "content": (
-                    f"{audit.location}의 {audit.display_name}({audit.industry})에 대해 고객이 방문 전에 확인하려는 정보와 질문을 "
-                    "5개 이내로 정리해줘. 매장명과 상권이 함께 일치하는 출처만 인용하고 다른 지점·다른 업종을 제외해줘. "
-                    "확인되지 않은 매장 사실은 추정하지 말고 확인 필요로 표시해줘.\n\n"
-                    f"현재 채널 요약: {diagnosis_text[:1200] or '(직접 입력 없음 — 공개 채널 자동 수집 결과 참고)'}"
+                    f"{audit.location}의 {audit.display_name}({audit.industry})에 관한 공개 자료에서 "
+                    "주소·영업시간·메뉴 가격·주차·예약·메뉴 언급을 각각 정리해줘. "
+                    "매장명과 상권이 함께 일치하는 출처만 인용하고 다른 지점·다른 업종은 제외해줘. "
+                    "출처에 적힌 표현과 게시일을 함께 제시하고 서로 다른 시간·가격은 합치지 말아줘. "
+                    "검색에서 확인 못한 정보는 확인 필요로 표시하고 매장에 실제로 없다고 단정하지 마. "
+                    "메뉴 언급을 대표메뉴로 바꾸거나 고객 수요·검색량·인기를 추정하지 마.\n\n"
+                    f"참고 입력(현재 사실로 검증되지 않음): {diagnosis_text[:1200] or '(직접 입력 없음)'}"
                 ),
             }
         ]
@@ -1344,11 +1345,11 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         "title": STEP_TITLES[1],
         "status": "done",
         "latency_ms": step2_ms,
-        "detail": f"인용 {len(agent_references)}건 · 수요 요약 {len(agent_answer)}자",
+        "detail": f"참고 출처 {len(agent_references)}건 · 요약 {len(agent_answer)}자",
         "counts": {"references": len(agent_references)},
     })
     await _emit(emit, type="step", index=2, status="done", title=STEP_TITLES[1],
-                detail=f"인용 {len(agent_references)}건 정리 완료", latency_ms=step2_ms)
+                detail=f"참고 출처 {len(agent_references)}건 정리 완료", latency_ms=step2_ms)
 
     # ---------------- 인용 출처 분석 ----------------
     all_sources: list[dict[str, Any]] = []
@@ -1362,6 +1363,14 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         raise LinerAPIError(
             "입력한 매장과 상권이 함께 확인되는 공개 자료를 찾지 못했어요. 정확한 지점명·동네로 다시 검색해 주세요."
         )
+    collected_at = datetime.now(KST).isoformat(timespec="seconds")
+    if not using_demo:
+        # Agent 응답의 referenceChunks는 URL이 일치하는 자료에만 evidence_review가 연결한다.
+        # answer 자체는 검색 근거나 고객 수요 측정치로 사용하지 않는다.
+        all_sources = prepare_sources(all_sources, agent_payload=agent)
+        enriched_urls = {source["url"]: source for source in all_sources}
+        agent_references = [enriched_urls[source["url"]] for source in agent_references]
+        collected_channel["sources"] = [enriched_urls[source["url"]] for source in collected_sources[:8]]
     excluded_urls.difference_update(source["url"] for source in all_sources)
     store_evidence = {
         "matched_source_count": len(all_sources),
@@ -1380,32 +1389,30 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
     # ---------------- Step 3 : Liner Router ----------------
     step_started = time.perf_counter()
     await _emit(emit, type="step", index=3, status="running", title=STEP_TITLES[2],
-                detail="채널 텍스트와 상권 수요·인용 비중을 대조해 결핍과 처방을 생성합니다.")
+                detail="주소·영업시간·가격·주차·예약·메뉴 언급의 근거를 확인합니다.")
 
     analysis: dict[str, Any] = {}
+    review: dict[str, Any] | None = None
     if using_demo:
         analysis = dict((demo_payload or {}).get("analysis", {}))
         client.record("chat.completions", mode="demo", status="ok", latency_ms=0, detail=f"model={DEFAULT_MODEL}")
     else:
         messages = [
-            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": _router_user_prompt(
-                    audit,
-                    diagnosis_text,
-                    agent_answer,
-                    all_sources,
-                    queries,
-                    citation_analysis,
-                    collected_channel,
-                ),
-            },
+            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": extraction_prompt(audit.display_name, audit.location, all_sources)},
         ]
         try:
-            completion = await client.chat_completions(messages)
+            completion = await client.chat_completions(messages, json_object=False)
             analysis = client.parse_json_content(completion)
-            _validate_router_analysis(analysis, known_urls)
+            if not isinstance(analysis.get("observations"), list):
+                raise LinerAPIError(
+                    "Liner Router의 항목별 근거 응답이 불완전합니다. 잠시 후 다시 시도해 주세요.",
+                    endpoint="chat.completions",
+                )
+            review = build_review(
+                analysis["observations"], all_sources,
+                store_name=audit.display_name, location=audit.location, collected_at=collected_at,
+            )
         except LinerAPIError:
             # HTTP 200이어도 JSON 파싱·진단 검증 실패는 성공한 호출로 표시하지 않는다.
             router_call = next(
@@ -1416,22 +1423,45 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
                 router_call["detail"] = "invalid_response"
             raise
 
-    scores = _normalize_scores(analysis.get("scores"))
-    for item in scores:
-        item["score"] = _clamp_score(item["score"])
-    computed_overall = weighted_overall(scores)
-    overall = _clamp_score(analysis.get("overall_score"), computed_overall)
-    gaps = _normalize_gaps(analysis.get("gaps"), known_urls)
-    contents = _normalize_contents(analysis.get("contents"))
-    recommendations = _normalize_recommendations(analysis.get("recommended_channels"), citation_analysis)
-    apply_content_priority(contents, recommendations)
-    if any(not gap["sources"] for gap in gaps):
-        warnings.append("일부 확인 항목은 개별 출처 연결이 없어 직접 확인이 필요합니다.")
-
-    if len(gaps) != 3:
-        warnings.append(f"결핍이 3개가 아닌 {len(gaps)}개로 반환되었습니다.")
-    if len(contents) != 3:
-        warnings.append(f"콘텐츠가 3종이 아닌 {len(contents)}종으로 반환되었습니다.")
+    if using_demo:
+        # 과거 UI를 검증하는 오프라인 픽스처에만 점수·정해진 3종 콘텐츠를 유지한다.
+        scores = _normalize_scores(analysis.get("scores"))
+        for item in scores:
+            item["score"] = _clamp_score(item["score"])
+        computed_overall = weighted_overall(scores)
+        overall = _clamp_score(analysis.get("overall_score"), computed_overall)
+        gaps = _normalize_gaps(analysis.get("gaps"), known_urls)
+        contents = _normalize_contents(analysis.get("contents"))
+        recommendations = _normalize_recommendations(analysis.get("recommended_channels"), citation_analysis)
+        apply_content_priority(contents, recommendations)
+        summary = str(analysis.get("summary") or "").strip()
+        if any(not gap["sources"] for gap in gaps):
+            warnings.append("일부 확인 항목은 개별 출처 연결이 없어 직접 확인이 필요합니다.")
+        if len(gaps) != 3:
+            warnings.append(f"결핍이 3개가 아닌 {len(gaps)}개로 반환되었습니다.")
+        if len(contents) != 3:
+            warnings.append(f"콘텐츠가 3종이 아닌 {len(contents)}종으로 반환되었습니다.")
+    else:
+        assert review is not None
+        scores, contents, recommendations = [], [], []
+        computed_overall, overall = None, None
+        summary = review["summary"]
+        sources_by_id = {source["source_id"]: source for source in all_sources}
+        gaps = []
+        for action in review["actions"]:
+            resolved = [sources_by_id[key] for key in action["source_ids"] if key in sources_by_id]
+            gaps.append({
+                "id": f"gap-{action['field']}",
+                "title": action["title"],
+                "severity": action["priority"] if action["priority"] in ("high", "medium", "low") else "medium",
+                "dimension": action["field"],
+                "dimension_label": action["label"],
+                "reason": action["reason"],
+                "demand_evidence": "",
+                "source_urls": [source["url"] for source in resolved],
+                "sources": resolved,
+                "fix_hint": action["action"],
+            })
     if not citation_analysis["total"]:
         warnings.append("분석할 출처가 없어 인용 비중을 계산하지 못했습니다.")
 
@@ -1445,6 +1475,7 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         "latency_ms": step3_ms,
         "detail": (
             f"결핍 {len(gaps)}건 · 콘텐츠 {len(contents)}종 · 추천 {len(recommendations)}채널 · 종합 {overall}점"
+            if using_demo else f"방문 정보 {len(review['fields'])}개 항목 확인 · 후속 조치 {len(gaps)}건"
         ),
         "counts": {
             "gaps": len(gaps),
@@ -1453,7 +1484,8 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         },
     })
     await _emit(emit, type="step", index=3, status="done", title=STEP_TITLES[2],
-                detail=f"진단 완료 · 종합 {overall}점", latency_ms=step3_ms)
+                detail=f"진단 완료 · 종합 {overall}점" if using_demo else "항목별 근거 확인 완료",
+                latency_ms=step3_ms)
 
     total_ms = int((time.perf_counter() - started) * 1000)
     totals = client.totals()
@@ -1479,10 +1511,16 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         "store_evidence": store_evidence,
         "citation_analysis": citation_analysis,
         "recommended_channels": recommendations,
-        "demand": {"answer": agent_answer, "references": agent_references},
+        "demand": {
+            "answer": agent_answer,
+            "references": agent_references,
+            "label": "Search Agent 참고 요약",
+            "scope": "방문 전 확인할 질문을 정리한 참고 자료이며 실제 고객 수요를 측정한 결과가 아닙니다.",
+        },
+        "evidence_review": review,
         "overall_score": overall,
         "computed_overall": computed_overall,
-        "summary": str(analysis.get("summary") or "").strip(),
+        "summary": summary,
         "scores": scores,
         "gaps": gaps,
         "contents": contents,

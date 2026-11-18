@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 
 import httpx
@@ -17,23 +16,24 @@ from app.auditor import (
     filter_store_sources,
     parse_search_query,
 )
-from app.demo_fixtures import get_fixture
 from app.liner_client import LinerClient
 
 
-def install_transport(monkeypatch, analysis, *, fail_collection=False):
+def install_transport(monkeypatch, analysis, *, fail_collection=False, description="", agent_payload=None, requests=None):
     searches = 0
     instances = []
 
     def handler(request):
         nonlocal searches
+        if requests is not None:
+            requests.append(request)
         if request.url.path.endswith('/tools/search/web'):
             searches += 1
             if fail_collection and searches > 3:
                 return httpx.Response(503, json={})
-            return httpx.Response(200, json={'results': [{'url': 'https://blog.naver.com/review/1', 'title': '성수동 모먼트 카페 검색 결과'}]})
+            return httpx.Response(200, json={'results': [{'url': 'https://blog.naver.com/review/1', 'title': '성수동 모먼트 카페 검색 결과', 'description': description}]})
         if request.url.path.endswith('/agents/search'):
-            return httpx.Response(200, json={'answer': '주차·가격 안내가 필요합니다.', 'references': []})
+            return httpx.Response(200, json=agent_payload or {'answer': '주차·가격 안내가 필요합니다.', 'references': []})
         return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(analysis)}}]})
 
     original_init = LinerClient.__init__
@@ -47,26 +47,11 @@ def install_transport(monkeypatch, analysis, *, fail_collection=False):
     return instances
 
 
-@pytest.mark.parametrize('defect', [
-    'empty', 'scores', 'gaps', 'contents', 'empty_body', 'bad_score', 'summary',
-    'summary_object', 'gap_reason_object', 'gap_title_object', 'content_body_object', 'content_title_object',
+@pytest.mark.parametrize('analysis', [
+    {}, {'scores': [], 'gaps': [], 'contents': []}, {'observations': None},
+    {'observations': {}}, {'observations': ''}, {'observations': 3},
 ])
-def test_incomplete_router_output_fails_without_synthetic_result(client, monkeypatch, defect):
-    analysis = copy.deepcopy(get_fixture('seongsu-cafe')['analysis'])
-    if defect == 'empty':
-        analysis = {}
-    elif defect in ('scores', 'gaps', 'contents', 'summary'):
-        analysis.pop(defect)
-    elif defect == 'empty_body':
-        analysis['contents'][0]['body'] = ''
-    elif defect == 'summary_object':
-        analysis['summary'] = {'text': '잘못된 타입'}
-    elif defect.startswith('gap_'):
-        analysis['gaps'][0][defect.split('_')[1]] = {'text': '잘못된 타입'}
-    elif defect.startswith('content_'):
-        analysis['contents'][0][defect.split('_')[1]] = {'text': '잘못된 타입'}
-    else:
-        analysis['scores'][0]['score'] = 'not-a-number'
+def test_incomplete_router_output_fails_without_synthetic_result(client, monkeypatch, analysis):
     instances = install_transport(monkeypatch, analysis)
     response = client.post('/api/audit', json={'query': '성수동 모먼트 카페'})
     assert response.status_code == 502
@@ -81,7 +66,7 @@ def test_incomplete_router_output_fails_without_synthetic_result(client, monkeyp
 
 
 def test_collection_failure_stops_without_fake_diagnosis(client, monkeypatch):
-    analysis = copy.deepcopy(get_fixture('seongsu-cafe')['analysis'])
+    analysis = {'observations': []}
     install_transport(monkeypatch, analysis, fail_collection=True)
     response = client.post('/api/audit', json={'query': '성수동 모먼트 카페'})
     assert response.status_code == 502
@@ -146,7 +131,7 @@ def test_store_evidence_requires_both_locality_and_distinctive_name(store, locat
 
 
 def test_unrelated_sources_never_become_store_diagnosis(client, monkeypatch):
-    instances = install_transport(monkeypatch, get_fixture('seongsu-cafe')['analysis'])
+    instances = install_transport(monkeypatch, {'observations': []})
     response = client.post('/api/audit', json={'query': '성수동 카페 로우키'})
     assert response.status_code == 502
     assert '공개 자료를 찾지 못했어요' in response.json()['detail']
@@ -154,11 +139,14 @@ def test_unrelated_sources_never_become_store_diagnosis(client, monkeypatch):
 
 
 def test_evidence_and_unknown_domains_are_not_claimed_as_official(client, monkeypatch):
-    install_transport(monkeypatch, get_fixture('seongsu-cafe')['analysis'])
+    install_transport(monkeypatch, {'observations': []})
     body = client.post('/api/audit', json={'query': '성수동 카페 모먼트'}).json()
     assert body['mode'] == 'live'
     assert body['store_evidence']['matched_source_count'] == 1
     assert body['store_evidence']['sources'] == body['sources']
+    assert body['sources'][0]['source_id'] == 'S1'
+    assert body['sources'][0]['publisher_status'] == 'unverified'
+    assert len(body['evidence_review']['fields']) == 6
     assert build_citation_analysis([{'url': 'https://unknown-shop.example/'}])['top_channel'] == 'unclassified'
 
 
@@ -187,7 +175,7 @@ def test_free_query_preserves_store_names_containing_industry(query, store, indu
 
 @pytest.mark.parametrize('query', ['성수동 카페', '서울대입구 피부과', '로우키'])
 def test_live_diagnosis_requires_location_and_store_name(client, monkeypatch, query):
-    instances = install_transport(monkeypatch, get_fixture('seongsu-cafe')['analysis'])
+    instances = install_transport(monkeypatch, {'observations': []})
     response = client.post('/api/audit', json={'query': query})
     assert response.status_code == 400
     assert 'overall_score' not in response.json()
@@ -243,3 +231,60 @@ def test_explicit_other_branch_title_is_not_target_store_evidence(title, expecte
     matched, excluded = filter_store_sources(audit, [source])
     assert bool(matched) is expected
     assert bool(excluded) is not expected
+
+
+def test_live_observations_use_verifiable_materials_and_forward_agent_excerpts(client, monkeypatch):
+    source_url = 'https://blog.naver.com/review/1'
+    requests = []
+    observations = [
+        {'field': 'hours', 'subject': '영업시간', 'scope': '매일', 'value': '10:00-22:00',
+         'source_id': 'S1', 'material_id': 'summary', 'quote': '영업시간 매일 10:00-22:00'},
+        {'field': 'reservation', 'value': '전화 예약 가능', 'source_id': 'S1',
+         'material_id': 'agent-1', 'quote': '모먼트 카페 전화 예약 가능'},
+        {'field': 'parking', 'value': '무료 주차 가능', 'source_id': 'S1',
+         'material_id': 'summary', 'quote': '무료 주차 가능'},
+    ]
+    install_transport(monkeypatch, {'observations': observations},
+                      description='성수동 모먼트 카페 영업시간 매일 10:00-22:00',
+                      agent_payload={
+                          'answer': '측정되지 않은 고객 수요 주장', 'references': [],
+                          'referenceChunks': [{'sourceUrl': source_url, 'content': '모먼트 카페 전화 예약 가능'}],
+                      }, requests=requests)
+    response = client.post('/api/audit', json={
+        'query': '성수동 모먼트 카페', 'channel_text': '검증되지 않은 직접 입력 주장',
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    review = body['evidence_review']
+    fields = {item['key']: item for item in review['fields']}
+    assert fields['hours']['observations'][0]['quote'] == '영업시간 매일 10:00-22:00'
+    assert fields['reservation']['observations'][0]['evidence_kind'] == 'agent_excerpt'
+    assert fields['parking']['status'] == 'not_found'
+    assert review['stats']['rejected_observations'] == 1
+    assert all(source['publisher_status'] == 'unverified' for source in body['sources'])
+    for gap in body['gaps']:
+        assert set(gap['source_urls']) <= {source_url}
+        assert gap['fix_hint']
+    agent_request = next(request for request in requests if request.url.path.endswith('/agents/search'))
+    agent_prompt = json.loads(agent_request.content)['messages'][0]['content']
+    assert '주소·영업시간·메뉴 가격·주차·예약·메뉴 언급' in agent_prompt
+    assert '고객 수요·검색량·인기를 추정하지 마' in agent_prompt
+    router_request = next(request for request in requests if request.url.path.endswith('/chat/completions'))
+    payload = json.loads(router_request.content)
+    assert 'response_format' not in payload
+    assert '측정되지 않은 고객 수요 주장' not in payload['messages'][-1]['content']
+    assert '검증되지 않은 직접 입력 주장' not in payload['messages'][-1]['content']
+    assert '모먼트 카페 전화 예약 가능' in payload['messages'][-1]['content']
+
+
+def test_empty_observations_do_not_create_score_or_synthetic_content(client, monkeypatch):
+    install_transport(monkeypatch, {'observations': []})
+    response = client.post('/api/audit', json={'query': '성수동 모먼트 카페'})
+    assert response.status_code == 200
+    body = response.json()
+    assert body['overall_score'] is None
+    assert body['computed_overall'] is None
+    assert body['scores'] == body['contents'] == body['recommended_channels'] == []
+    assert all(field['status'] == 'not_found' for field in body['evidence_review']['fields'])
+    assert all('추출하지 못했어요' in field['summary'] for field in body['evidence_review']['fields'])
+    assert not any('3개가 아닌' in warning or '3종이 아닌' in warning for warning in body['warnings'])

@@ -441,7 +441,8 @@
     root.replaceChildren();
     root.classList.add('cs-studio');
     const knownSources = new Map();
-    (Array.isArray(result?.sources) ? result.sources : []).forEach((source) => {
+    const cardSources = result?.evidence_review ? result.evidence_review.content_sources : result?.sources;
+    (Array.isArray(cardSources) ? cardSources : []).forEach((source) => {
       const url = httpURL(source?.url);
       if (!url || url.length > 2048 || source.demo || knownSources.has(url) || knownSources.size >= 30) return;
       knownSources.set(url, { url, title: String(source.title || '').slice(0, 500), description: String(source.description || '').slice(0, 3000) });
@@ -458,7 +459,7 @@
     const title = element('h2', 'card-title', '검색한 정보로 카드뉴스까지');
     title.id = 'card-studio-title';
     root.setAttribute('aria-labelledby', title.id);
-    header.append(title, element('p', 'cs-subtitle', '카드 3장을 만들고 문구를 수정해 바로 저장해요.'));
+    header.append(title, element('p', 'cs-subtitle', '문구를 만들고 카드 틀에 넣어 PNG로 저장해요. 매장 사진을 생성하는 기능은 아니에요.'));
     const actions = element('div', 'cs-actions');
     session.generate = button('카드뉴스 만들기', 'cs-button cs-primary', () => generate(session));
     session.cancelButton = button('취소', 'cs-button cs-secondary', () => {

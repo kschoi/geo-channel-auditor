@@ -37,7 +37,7 @@
   const state = { running: false, result: null, tab: 'instagram', copyStore: [], controller: null };
 
   /* 진행 단계는 짧은 제목만 노출한다. 세부 수치는 결과의 '자세히 보기'에 있다. */
-  const STEP_DEFS = ['상권 검색', '고객 기대 정보 분석', '빠진 정보 · 콘텐츠 진단'];
+  const STEP_DEFS = ['매장 자료 검색', '검색 자료 확인', '항목별 근거 정리'];
 
   const CHANNEL_LABEL = { instagram: '인스타그램', naver_place: '네이버 플레이스', blog_faq: '블로그 FAQ' };
   const CITE_COLORS = ['#3182f6', '#7aa7f0', '#a9c6f3', '#cddcf3', '#dfe4ea'];
@@ -112,9 +112,9 @@
     const length = (els.channelText.value || '').trim().length;
     els.charCount.textContent = length.toLocaleString('ko-KR');
     if (length >= CHANNEL_MIN_CHARS) {
-      els.collectHint.textContent = '이 채널 글로 진단해요.';
+      els.collectHint.textContent = '입력한 설명을 검색 자료 정리에 참고해요.';
     } else if (length > 0) {
-      els.collectHint.textContent = '글이 짧아 공개 채널을 함께 찾아 진단해요.';
+      els.collectHint.textContent = '입력한 설명을 검색 자료 정리에 참고해요.';
     } else {
       els.collectHint.textContent = '비워두면 공개 채널을 자동으로 찾아 진단해요.';
     }
@@ -156,7 +156,7 @@
     const timeout = setTimeout(() => { timedOut = true; state.controller?.abort(); }, 420000);
     els.progressHint.textContent = '공개 정보를 확인하고 있어요.';
     const slowHint = setTimeout(() => {
-      els.progressHint.textContent = '아직 분석 중이에요. 콘텐츠 생성까지 몇 분 걸릴 수 있어요.';
+      els.progressHint.textContent = '아직 분석 중이에요. 검색 자료 정리까지 몇 분 걸릴 수 있어요.';
     }, 20000);
     state.result = null;
     state.copyStore = [];
@@ -252,29 +252,208 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* 결과 — 4개 카드 + 접힌 상세                                        */
+  /* 결과 — 대상 매장 · 확인할 일 · 항목별 근거 · 접힌 상세              */
   /* ------------------------------------------------------------------ */
   function renderResult(r) {
     setMode(r.mode, r.degraded);
     const prioritized = (r.contents || []).find((c) => c.priority_badge);
     state.tab = prioritized?.channel || r.contents?.[0]?.channel || 'instagram';
 
-    els.results.innerHTML = [
-      renderNotice(r),
-      renderEvidence(r),
-      renderScore(r),
-      renderCitation(r),
-      renderGaps(r),
-      renderContents(r),
+    const sections = r.evidence_review ? [
+      renderReviewOverview(r),
+      r.degraded ? renderNotice(r) : '',
+      renderReviewActions(r),
+      renderReviewFields(r),
       '<section id="card-studio" class="card"></section>',
       renderDetail(r),
-    ].join('');
+    ] : [
+      renderNotice(r), renderEvidence(r), renderScore(r), renderCitation(r),
+      renderGaps(r), renderContents(r),
+      '<section id="card-studio" class="card"></section>', renderDetail(r),
+    ];
+    els.results.innerHTML = sections.join('');
     showPanel('results');
     window.CardStudio?.render(r);
     bindTabs();
+    bindReviewLinks();
     bindCopyButtons();
     animateBars();
     els.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  const REVIEW_STATUS = {
+    found: '자료에 있음', different: '내용이 다름',
+    needs_check: '직접 확인 필요', not_found: '찾지 못함',
+  };
+  const REVIEW_FIELDS = new Set(['address', 'hours', 'price', 'parking', 'reservation', 'menu']);
+  const EVIDENCE_KIND = {
+    search_summary: '검색 결과 요약', search_title: '검색 결과 제목', agent_excerpt: '에이전트 인용문',
+  };
+
+  function sourceURL(value) {
+    try {
+      const url = new URL(String(value || ''));
+      return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+    } catch (_) { return ''; }
+  }
+
+  function reviewTime(value) {
+    const date = new Date(value);
+    if (!value || Number.isNaN(date.getTime())) return '시각 확인 안 됨';
+    return new Intl.DateTimeFormat('ko-KR', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    }).format(date);
+  }
+
+  function sourceDate(value) {
+    return value ? `게시일 ${String(value).slice(0, 100)}` : '게시일 미확인';
+  }
+
+  function renderReviewOverview(r) {
+    const review = r.evidence_review;
+    const input = r.input || {};
+    const sourceCount = Number(review.stats?.source_count ?? r.sources?.length) || 0;
+    return `<section class="card review-overview">
+      <p class="review-kicker">매장 검색 자료 검토</p>
+      <h2 class="review-store">${esc(input.store_name || '선택한 매장')}</h2>
+      <p class="review-location">${esc([input.location, input.industry].filter(Boolean).join(' · '))}</p>
+      <ul class="review-meta">
+        <li>자료 <b>${sourceCount}건</b></li>
+        <li>검토 시각 ${esc(reviewTime(r.generated_at))}</li>
+      </ul>
+      ${review.scope ? `<p class="review-scope">${esc(review.scope)}</p>` : ''}
+    </section>`;
+  }
+
+  function renderReviewActions(r) {
+    const review = r.evidence_review;
+    const actions = [...(review.actions || [])]
+      .sort((a, b) => (Number(a.priority) || 99) - (Number(b.priority) || 99)).slice(0, 3);
+    if (!actions.length) return `<section class="card review-actions">
+      <h2 class="card-title">먼저 확인할 일</h2>
+      <p class="empty-message">우선 확인할 항목을 따로 찾지 못했어요. 아래 자료의 내용과 날짜를 살펴보세요.</p>
+    </section>`;
+    const rows = actions.map((action, index) => {
+      const field = (review.fields || []).find((item) => item.key === action.field);
+      const linked = field && REVIEW_FIELDS.has(field.key);
+      const linkLabel = field?.observations?.length ? '근거 보기' : '확인 항목 보기';
+      return `<li class="review-action">
+        <span class="review-action-number" aria-hidden="true">${index + 1}</span>
+        <div class="review-action-body">
+          <h3 class="review-action-title">${esc(action.title || action.label)}</h3>
+          ${action.reason ? `<p class="review-action-reason">${esc(action.reason)}</p>` : ''}
+          <div class="review-action-task"><span>할 일</span><p>${esc(action.action || '매장에서 실제 정보를 확인해 주세요.')}</p></div>
+          <div class="review-action-footer">
+            <span>${esc(action.channel || '운영 중인 매장 채널')}</span>
+            ${linked ? `<a href="#review-${field.key}" data-review-target="${field.key}">${linkLabel}</a>` : ''}
+          </div>
+        </div>
+      </li>`;
+    }).join('');
+    return `<section class="card review-actions">
+      <div class="card-head"><h2 class="card-title">먼저 확인할 일</h2><span class="card-meta">${actions.length}가지</span></div>
+      <ol class="review-action-list">${rows}</ol>
+    </section>`;
+  }
+
+  function observationContext(observation) {
+    return [...new Set([observation.subject, observation.scope].filter(Boolean))].join(' · ');
+  }
+
+  function observationQualification(observation) {
+    const defaults = { uncertain: '추가 확인 필요', historical: '과거 정보', undated: '게시일 미확인' };
+    return Object.hasOwn(defaults, observation.qualification)
+      ? observation.qualification_label || defaults[observation.qualification] : '';
+  }
+
+  function renderValuePreview(field) {
+    const seen = new Set();
+    const unique = (field.observations || []).filter((item) => {
+      if (!item.value) return false;
+      const key = JSON.stringify([item.subject || '', item.scope || '', item.value]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!unique.length) return '';
+    let ordered = unique;
+    if (field.key === 'hours') {
+      // 같은 시간의 반복 자료보다 서로 다른 시간 값을 먼저 보여 준다. 적용 요일도 함께 표시한다.
+      const values = new Set();
+      const distinct = unique.filter((item) => {
+        if (values.has(item.value)) return false;
+        values.add(item.value);
+        return true;
+      });
+      ordered = [...distinct, ...unique.filter((item) => !distinct.includes(item))];
+    }
+    const rows = ordered.slice(0, 3).map((item) => {
+      const context = observationContext(item);
+      const qualification = observationQualification(item);
+      return `<li class="review-value-row">
+        ${context ? `<span class="review-value-context">${esc(context)}</span>` : ''}
+        <strong class="review-value-text">${esc(item.value)}</strong>
+        ${qualification ? `<span class="review-value-note">${esc(qualification)}</span>` : ''}
+      </li>`;
+    }).join('');
+    return `<ul class="review-values" aria-label="자료에서 찾은 값">${rows}</ul>`;
+  }
+
+  function renderObservation(observation, sources) {
+    const source = sources.find((item) => (observation.source_id && item.source_id === observation.source_id)
+      || (observation.source_url && item.url === observation.source_url));
+    const url = sourceURL(observation.source_url || source?.url);
+    const kind = observation.evidence_label || EVIDENCE_KIND[observation.evidence_kind] || '검색 자료';
+    const qualification = observationQualification(observation);
+    const context = observationContext(observation);
+    const title = observation.source_title || source?.title || '출처 열기';
+    return `<li class="review-proof">
+      <div class="review-proof-labels"><span>${esc(kind)}</span>${qualification ? `<span class="review-proof-caution">${esc(qualification)}</span>` : ''}</div>
+      ${observation.value ? `<p class="review-proof-value">${context ? `<span>${esc(context)} · </span>` : ''}${esc(observation.value)}</p>` : ''}
+      ${observation.quote ? `<p class="review-proof-quote">${esc(observation.quote)}</p>` : '<p class="review-proof-missing">근거 문장이 연결되지 않았어요.</p>'}
+      ${url ? `<a class="review-proof-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}<span class="sr-only"> (새 창)</span></a>` : `<p class="review-proof-missing">출처 링크를 확인하지 못했어요.</p>`}
+      <p class="review-proof-meta">${esc(sourceDate(observation.source_date || source?.date))} · ${esc(source?.publisher_label || '운영 주체 미확인')}</p>
+    </li>`;
+  }
+
+  function renderReviewFields(r) {
+    const fields = r.evidence_review.fields || [];
+    const sources = r.sources || [];
+    const rows = fields.map((field, index) => {
+      const status = Object.hasOwn(REVIEW_STATUS, field.status) ? field.status : 'needs_check';
+      const observations = field.observations || [];
+      const id = REVIEW_FIELDS.has(field.key) ? `review-${field.key}` : `review-field-${index}`;
+      return `<li class="review-field" id="${id}">
+        <div class="review-field-heading"><h3>${esc(field.label || field.key)}</h3>
+          <span class="review-status review-status-${status}">${esc(field.status_label || REVIEW_STATUS[status])}</span></div>
+        <p class="review-field-summary">${esc(field.summary || '검색 자료에서 확인한 내용을 살펴보세요.')}</p>
+        ${renderValuePreview(field)}
+        ${observations.length ? `<details class="review-proofs"><summary>근거 ${observations.length}개 보기</summary>
+          <ul class="review-proof-list">${observations.map((item) => renderObservation(item, sources)).join('')}</ul>
+        </details>` : ''}
+      </li>`;
+    }).join('');
+    return `<section class="card review-checklist">
+      <div class="card-head"><h2 class="card-title">항목별 확인 내용</h2><span class="card-meta">${fields.length}개 항목</span></div>
+      <ul class="review-field-list">${rows}</ul>
+    </section>`;
+  }
+
+  function bindReviewLinks() {
+    $$('[data-review-target]', els.results).forEach((link) => {
+      link.addEventListener('click', (event) => {
+        const key = link.dataset.reviewTarget;
+        if (!REVIEW_FIELDS.has(key)) return;
+        const field = document.getElementById(`review-${key}`);
+        if (!field) return;
+        event.preventDefault();
+        const details = $('details', field);
+        if (details) details.open = true;
+        field.tabIndex = -1;
+        field.focus({ preventScroll: true });
+        field.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
   }
 
   function renderNotice(r) {
@@ -324,11 +503,12 @@
     </section>`;
   }
 
-  function renderCitation(r) {
+  function renderCitation(r, nested = false) {
+    const wrapper = nested ? 'citation-detail' : 'card';
     const citation = r.citation_analysis;
     const channels = citation?.channels || [];
-    if (!citation || !channels.length || !citation.total) return `<section class="card">
-      <h2 class="card-title">Liner 출처 비중</h2>
+    if (!citation || !channels.length || !citation.total) return `<section class="${wrapper}">
+      <h2 class="card-title">이번에 찾은 자료 구성</h2>
       <p class="empty-message">분석할 출처를 찾지 못했어요. 매장 이름을 더 정확히 입력하거나 채널 글을 직접 넣어 주세요.</p></section>`;
 
     const segments = channels
@@ -347,17 +527,13 @@
       </li>`).join('');
 
     return `
-    <section class="card">
+    <section class="${wrapper}">
       <div class="card-head">
-        <h2 class="card-title">Liner 출처 비중</h2>
+        <h2 class="card-title">이번에 찾은 자료 구성</h2>
         <span class="card-meta">출처 ${citation.total}건</span>
       </div>
-      <p class="source-scope">검색 결과·에이전트 인용 출처 기준 · URL 중복 제외</p>
-      <p class="cite-top">
-        <span class="cite-top-label">${esc(citation.top_label || '')}</span>
-        <span class="cite-top-share">${fmtPct(citation.top_share_pct)}%</span>
-      </p>
-      <div class="prop-bar" role="img" aria-label="채널별 인용 비중">${segments}</div>
+      <p class="source-scope">검색 결과·에이전트 인용 자료 · URL 중복 제외. 노출량이나 홍보 성과를 측정한 값은 아니에요.</p>
+      <div class="prop-bar" role="img" aria-label="이번에 찾은 자료의 채널별 URL 비중">${segments}</div>
       <ul class="cite-list">${rows}</ul>
     </section>`;
   }
@@ -370,7 +546,8 @@
         <span class="gap-num">${index + 1}</span>
         <div>
           <p class="gap-title">${esc(gap.title)}</p>
-          <p class="gap-desc">${esc(gap.reason || gap.fix_hint || '')}</p>
+          <p class="gap-desc">${esc(gap.reason || '')}</p>
+          ${gap.fix_hint ? `<p class="gap-fix">${esc(gap.fix_hint)}</p>` : ''}
         </div>
       </li>`).join('');
 
@@ -386,7 +563,7 @@
 
   function renderContents(r) {
     const contents = r.contents || [];
-    if (!contents.length) return '<section class="card"><h2 class="card-title">콘텐츠 초안</h2><p class="empty-message">콘텐츠를 만들지 못했어요. 다시 진단해 주세요.</p></section>';
+    if (!contents.length) return '';
     state.copyStore = contents.map((c) => c.body || '');
     const active = contents.some((c) => c.channel === state.tab) ? state.tab : contents[0].channel;
     const top = (r.recommended_channels || [])[0];
@@ -430,7 +607,7 @@
     </section>`;
   }
 
-  /* 접힌 상세 — 출처, 수집 채널, 고객 수요, API 로그, 원시 JSON */
+  /* 접힌 상세 — 자료 구성, 전체 출처, 검색 요약, API 로그 */
   function renderDetail(r) {
     const blocks = [];
     const warnings = r.warnings || [];
@@ -438,6 +615,8 @@
     const demand = (r.demand?.answer || '').trim();
     const sources = r.sources || [];
     const pipeline = r.pipeline || {};
+
+    if (r.evidence_review) blocks.push(renderCitation(r, true));
 
     if (warnings.length) {
       blocks.push(`
@@ -460,7 +639,7 @@
     if (demand) {
       blocks.push(`
         <div>
-          <p class="more-section-title">상권 고객 수요</p>
+          <p class="more-section-title">검색 자료 요약</p>
           <p class="reason-list"><span>${esc(demand)}</span></p>
         </div>`);
     }
@@ -483,11 +662,12 @@
           <p class="more-section-title">출처 ${sources.length}건</p>
           <div class="source-list">
             ${sources.map((src) => `
-              <a class="source-row" href="${esc(src.url)}" target="_blank" rel="noreferrer" title="${esc(src.title)}">
+              <a class="source-row" href="${esc(sourceURL(src.url) || '#')}" target="_blank" rel="noopener noreferrer" title="${esc(src.title)}">
                 <img src="${esc(src.faviconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
                 <span style="min-width:0">
                   <span class="source-title">${esc(src.title)}</span>
-                  <span class="source-meta">${esc(src.hostname)}${src.demo ? ' · DEMO' : ''}</span>
+                  <span class="source-meta">${esc(src.hostname)} · ${esc(src.publisher_label || '운영 주체 미확인')}${src.demo ? ' · DEMO' : ''}</span>
+                  <span class="source-meta">${esc(sourceDate(src.date))}</span>
                 </span>
               </a>`).join('')}
           </div>
