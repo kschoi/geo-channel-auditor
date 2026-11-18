@@ -121,6 +121,16 @@ class LinerClient:
     # ------------------------------------------------------------------ #
     # 텔레메트리
     # ------------------------------------------------------------------ #
+    def _redact(self, value: Any) -> Any:
+        """상위 API가 키를 반사해도 응답과 텔레메트리에 남기지 않는다."""
+        if isinstance(value, str):
+            return value.replace(self._api_key, "[REDACTED]") if self._api_key else value
+        if isinstance(value, list):
+            return [self._redact(item) for item in value]
+        if isinstance(value, dict):
+            return {self._redact(key): self._redact(item) for key, item in value.items()}
+        return value
+
     def record(
         self,
         endpoint: str,
@@ -141,6 +151,7 @@ class LinerClient:
             "request_id": request_id,
             "detail": detail,
         }
+        entry = self._redact(entry)
         self.calls.append(entry)
         return entry
 
@@ -181,6 +192,12 @@ class LinerClient:
                 timeout=timeout or self.timeout, transport=self._transport
             ) as client:
                 response = await client.request(method, url, json=payload, headers=self._headers())
+        except httpx.TimeoutException:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            self.record(endpoint, mode="live", status="error", latency_ms=elapsed, detail="timeout")
+            raise LinerAPIError(
+                "Liner API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.", endpoint=endpoint
+            ) from None
         except httpx.HTTPError as exc:
             elapsed = int((time.perf_counter() - started) * 1000)
             self.record(
@@ -188,15 +205,10 @@ class LinerClient:
             )
             raise LinerAPIError(
                 "Liner API에 연결하지 못했습니다. 네트워크 상태를 확인해 주세요.", endpoint=endpoint
-            ) from exc
+            ) from None
 
         elapsed = int((time.perf_counter() - started) * 1000)
-        try:
-            data = response.json()
-        except ValueError:
-            data = {}
-
-        if response.status_code >= 400:
+        if response.status_code >= 300:
             self.record(
                 endpoint,
                 mode="live",
@@ -206,12 +218,18 @@ class LinerClient:
             )
             raise LinerAPIError(_friendly_status(response.status_code), endpoint=endpoint, status=response.status_code)
 
-        if not isinstance(data, dict):
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+
+        if not isinstance(data, dict) or not data:
             self.record(
                 endpoint, mode="live", status="error", latency_ms=elapsed, http_status=response.status_code
             )
             raise LinerAPIError("Liner API 응답 형식을 해석할 수 없습니다.", endpoint=endpoint)
 
+        data = self._redact(data)
         self.record(
             endpoint,
             mode="live",
@@ -244,7 +262,10 @@ class LinerClient:
             "include_knowledge": include_knowledge,
         }
         data = await self._request("POST", "tools/search/web", payload, detail=detail or f"query={query}")
-        data.setdefault("results", [])
+        results = data.get("results")
+        if not isinstance(results, list) or any(not isinstance(item, dict) for item in results):
+            self.calls[-1]["status"] = "error"
+            raise LinerAPIError("Liner 검색 응답 형식을 해석할 수 없습니다.", endpoint="search.web")
         data["query"] = query
         return data
 
@@ -258,7 +279,14 @@ class LinerClient:
     ) -> dict[str, Any]:
         payload = {"messages": messages, "lang": lang, "mode": mode, "stream": stream}
         data = await self._request("POST", "agents/search", payload)
-        data.setdefault("answer", "")
+        answer, references = data.get("answer"), data.get("references", [])
+        if (
+            not isinstance(answer, str) or not answer.strip()
+            or not isinstance(references, list)
+            or any(not isinstance(item, dict) for item in references)
+        ):
+            self.calls[-1]["status"] = "error"
+            raise LinerAPIError("Liner Search Agent 응답이 비어 있거나 형식이 올바르지 않습니다.", endpoint="agents.search")
         data.setdefault("references", [])
         return data
 
@@ -291,7 +319,8 @@ class LinerClient:
     @staticmethod
     def message_content(data: dict[str, Any]) -> str:
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            content = data["choices"][0]["message"]["content"]
+            return content if isinstance(content, str) else ""
         except (KeyError, IndexError, TypeError):
             return ""
 
@@ -319,8 +348,8 @@ class LinerClient:
                 raise LinerAPIError(
                     "Liner Router 응답을 JSON으로 해석할 수 없습니다.", endpoint="chat.completions"
                 ) from None
-        if not isinstance(parsed, dict):
-            raise LinerAPIError("Liner Router 응답이 JSON 객체가 아닙니다.", endpoint="chat.completions")
+        if not isinstance(parsed, dict) or not parsed:
+            raise LinerAPIError("Liner Router 응답이 비어 있거나 JSON 객체가 아닙니다.", endpoint="chat.completions")
         return parsed
 
 

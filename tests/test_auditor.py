@@ -4,7 +4,7 @@
 * 공개 채널 자동 수집: channel_text 없이 실행 (auto) / 짧은 문구 (hybrid) / 충분한 문구 (manual)
 * 인용 출처 분석: 수집한 출처 URL의 채널 분류와 비중, 추천 채널 폴백
 * 라이브 모드: httpx.MockTransport 로 Liner API 3종 응답을 흉내 내 실제 파싱 경로 검증
-* 폴백: 라이브 호출 실패 시 데모 데이터로 대체되는지 검증
+* 실패 처리: 라이브 호출 실패 시 오류를 알리고 가상 결과를 반환하지 않는지 검증
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from app.liner_client import LinerClient
 SEARCH_URL = "https://blog.naver.com/moment_roastery/223456789"
 SEARCH_INSTA_URL = "https://www.instagram.com/p/CxDemoReel1/"
 AGENT_URL = "https://map.naver.com/p/entry/place/1234567"
-LONG_CHANNEL_TEXT = sample_data.channel_text_of(sample_data.SAMPLES[0])
+LONG_CHANNEL_TEXT = sample_data.channel_text_of(sample_data.DEMO_SAMPLES[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -145,18 +145,18 @@ def _make_transport(
                     "totalCount": 2,
                     "results": [
                         {
-                            "title": f"검색 결과: {body['query']}",
+                            "title": f"모먼트 로스터리 성수점 테스트 로스터리 검색 결과: {body['query']}",
                             "url": SEARCH_URL,
                             "hostname": "blog.naver.com",
                             "faviconUrl": "https://blog.naver.com/favicon.ico",
-                            "description": "상권 검색 수요 근거",
+                            "description": "서울 성동구 성수동2가 모먼트 로스터리 성수점 테스트 로스터리 카페 상권 근거",
                             "date": "2026-11-01",
                         },
                         {
-                            "title": f"릴스: {body['query']}",
+                            "title": f"모먼트 로스터리 성수점 테스트 로스터리 릴스: {body['query']}",
                             "url": SEARCH_INSTA_URL,
                             "hostname": "www.instagram.com",
-                            "description": "SNS 노출 근거",
+                            "description": "서울 성동구 성수동2가 모먼트 로스터리 성수점 테스트 로스터리 카페 SNS 근거",
                             "date": "2026-11-02",
                         },
                     ],
@@ -170,7 +170,7 @@ def _make_transport(
                     "answer": "고객은 주차·가격·좌석 정보를 먼저 확인합니다.",
                     "references": [
                         {
-                            "title": "상권 수요 정리",
+                            "title": "성수동 모먼트 로스터리 성수점 테스트 로스터리 카페 상권 수요 정리",
                             "url": AGENT_URL,
                             "hostname": "map.naver.com",
                             "description": "수요 요약",
@@ -245,7 +245,7 @@ def mock_transport(monkeypatch: pytest.MonkeyPatch):
         ("https://www.diningcode.com/profile.php?rid=abc", "review_media"),
         ("https://www.siksinhot.com/P/123", "review_media"),
         ("https://place.map.kakao.com/123", "review_media"),
-        ("https://news.example.co.kr/article/1", "review_media"),
+        ("https://news.example.co.kr/article/1", "unclassified"),
         ("https://search.naver.com/search.naver?where=blog&query=%EC%84%B1%EC%88%98", "naver_blog"),
         ("https://search.naver.com/search.naver?where=place&query=%EC%84%B1%EC%88%98", "naver_place"),
     ],
@@ -435,12 +435,14 @@ def test_samples_endpoint(client):
     body = response.json()
     assert len(body["samples"]) == 3
     ids = {s["id"] for s in body["samples"]}
-    assert ids == {"seongsu-cafe", "snu-derm", "sanbon-burger"}
+    assert ids == {sample["id"] for sample in sample_data.SAMPLES}
+    assert not ids.intersection(sample["id"] for sample in sample_data.DEMO_SAMPLES)
     for sample in body["samples"]:
         assert sample["store_name"]
-        assert set(sample["channels"]) == {"instagram", "naver_place", "blog"}
+        assert not any(sample["channels"].values())
         assert len(sample["queries"]) >= 2
-    assert "가상" in body["notice"]
+    assert "실제 매장" in body["notice"]
+    assert "만들지 않습니다" in body["notice"]
 
 
 def test_index_page_renders(client):
@@ -448,21 +450,22 @@ def test_index_page_renders(client):
     assert response.status_code == 200
     html = response.text
     assert "Geo Channel Auditor" in html
-    # 첫 화면은 단일 검색창이고 모드 배지는 LIVE/DEMO 점으로 표시한다.
+    # 키가 없으면 가상 진단 대신 API 연결 안내를 보여 준다.
     assert 'id="query"' in html
-    assert re.search(r'id="mode-label">(LIVE|DEMO)<', html)
-    # 가상 매장 3종은 예시 데이터로 템플릿에 실린다(JSON은 \uXXXX로 이스케이프된다).
+    assert re.search(r'id="mode-label">(LIVE|API 키 필요)<', html)
+    # 실제 매장 예시만 템플릿에 싣는다.
     match = re.search(r'<script id="samples-data" type="application/json">(.*?)</script>', html, re.DOTALL)
     assert match
     store_names = {sample["store_name"] for sample in json.loads(match.group(1))}
-    assert store_names == {"모먼트 로스터리 성수점", "브라이트 피부과의원", "버거워크 산본점"}
+    assert store_names == {sample["store_name"] for sample in sample_data.SAMPLES}
+    assert not store_names.intersection(sample["store_name"] for sample in sample_data.DEMO_SAMPLES)
 
 
 # --------------------------------------------------------------------------- #
 # 데모 모드 진단
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("sample", sample_data.SAMPLES, ids=lambda s: s["id"])
+@pytest.mark.parametrize("sample", sample_data.DEMO_SAMPLES, ids=lambda s: s["id"])
 def test_audit_demo_all_samples(client, sample):
     payload = {
         "sample_id": sample["id"],
@@ -610,7 +613,7 @@ def test_audit_requires_location_and_industry(client):
 
 
 def test_audit_stream_emits_steps_and_result(client):
-    sample = sample_data.SAMPLES[0]
+    sample = sample_data.DEMO_SAMPLES[0]
     payload = {"sample_id": sample["id"], "channel_text": sample_data.channel_text_of(sample)}
     with client.stream("POST", "/api/audit/stream", json=payload) as response:
         assert response.status_code == 200
@@ -734,6 +737,7 @@ def test_audit_live_hybrid_when_channel_text_is_short(client, monkeypatch, mock_
         json={
             "location": "서울 성동구 성수동2가",
             "industry": "스페셜티 카페",
+            "store_name": "테스트 로스터리",
             "channel_text": "성수동 로스터리 카페입니다.",
         },
     )
@@ -754,6 +758,7 @@ def test_recommendations_fallback_when_router_omits(client, monkeypatch, mock_tr
         json={
             "location": "서울 성동구 성수동2가",
             "industry": "스페셜티 카페",
+            "store_name": "테스트 로스터리",
             "channel_text": LONG_CHANNEL_TEXT,
         },
     )
@@ -769,45 +774,28 @@ def test_recommendations_fallback_when_router_omits(client, monkeypatch, mock_tr
     assert all(str(rec["share_pct"]) in rec["reason"] for rec in recommendations)
 
 
-def test_audit_live_mode_falls_back_to_demo_on_api_error(client, monkeypatch, mock_transport):
+def test_audit_live_failure_returns_error_without_demo(client, monkeypatch, mock_transport):
     monkeypatch.setenv("LINER_API_KEY", "test-key-do-not-leak")
     mock_transport(fail_status=500)
-
-    payload = {
-        "sample_id": "seongsu-cafe",
-        "channel_text": sample_data.channel_text_of(sample_data.SAMPLES[0]),
-    }
-    response = client.post("/api/audit", json=payload)
-    assert response.status_code == 200, response.text
-    body = response.json()
-
-    assert body["degraded"] is True
-    assert body["mode"] == "demo"
-    assert any("실패" in w for w in body["warnings"])
-    assert len(body["gaps"]) == 3
-    assert len(body["contents"]) == 3
-    assert len(body["recommended_channels"]) == 3
+    response = client.post("/api/audit", json={"query": "성수동 카페 로우키"})
+    assert response.status_code == 502
+    assert "Liner API 서버 오류" in response.json()["detail"]
+    assert "overall_score" not in response.json()
+    assert "contents" not in response.json()
 
 
 def test_request_api_key_is_not_echoed(client, mock_transport):
-    """요청 본문으로 받은 키는 응답·텔레메트리 어디에도 남지 않아야 한다."""
+    """실패 응답에 요청 키와 가상 결과가 섞이지 않아야 한다."""
     mock_transport(fail_status=401)
-    sample = sample_data.SAMPLES[1]
     secret = "lin_live_SUPER_SECRET_VALUE_123"
     response = client.post(
         "/api/audit",
-        json={
-            "sample_id": sample["id"],
-            "channel_text": sample_data.channel_text_of(sample),
-            "api_key": secret,
-        },
+        json={"query": "성수동 카페 로우키", "api_key": secret},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
+    assert response.status_code == 502
     assert secret not in response.text
-    assert body["input"]["api_key_source"] == "request"
-    assert body["degraded"] is True
-    assert "Liner API" in " ".join(body["warnings"])
+    assert "API 키" in response.json()["detail"]
+    assert "contents" not in response.json()
 
 
 def test_health_probe_does_not_break_without_key(client):

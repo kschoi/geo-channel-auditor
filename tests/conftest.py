@@ -23,6 +23,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("LINER_API_KEY", "")
     monkeypatch.setenv("DEMO_LATENCY_MS", "0")
+    monkeypatch.setenv("GEO_AUDITOR_TEST_DEMO", "1")
     yield
 
 

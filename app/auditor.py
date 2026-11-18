@@ -5,17 +5,18 @@
 2. Liner Search Agent API — 상권 고객이 기대하는 정보·질문 요약 + 인용 수집
 3. Liner Router API       — 채널 텍스트와 수요를 대조해 결핍 진단 + 채널별 보완 콘텐츠 생성
 
-부가 분석: Liner Search와 Liner Search Agent가 인용한 모든 출처 URL을 채널(네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론)로
+부가 분석: Liner Search 검색 결과·자동 수집 결과와 Search Agent 인용 출처 URL을 채널(네이버 블로그·플레이스·SNS·공식 웹·리뷰/언론)로
 분류한 `citation_analysis`와, 그 비중으로 "어느 채널부터 채울지"를 정한 `recommended_channels`를
-결과에 함께 담는다. 인용 비중은 Liner의 검색·에이전트가 실제로 인용한 출처만 세며, GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 별도로 수집하지는 않는다.
+결과에 함께 담는다. 비중은 URL 중복 제거 후 계산하며 실제 답변 인용 빈도와 다르다. GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 별도로 수집하지는 않는다.
 
-`LINER_API_KEY`가 없으면 같은 파이프라인이 `app/demo_fixtures.py`의 가상 응답으로 동작한다.
-API 호출이 실패하면 남은 단계를 데모 데이터로 폴백하고, 응답에 `degraded` 플래그와 경고를 남긴다.
+`LINER_API_KEY`가 없거나 API 호출이 실패하면 명확한 오류를 반환한다. 가상 진단으로 대체하지 않는다.
+`GEO_AUDITOR_TEST_DEMO=1`인 오프라인 테스트에서만 가상 픽스처를 사용할 수 있다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import time
@@ -23,6 +24,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from . import samples as sample_data
 from .demo_fixtures import build_generic_fixture, get_fixture
@@ -50,7 +52,8 @@ CITATION_CHANNELS: list[tuple[str, str]] = [
     ("naver_place", "네이버 플레이스"),
     ("instagram_sns", "인스타그램·SNS"),
     ("official_web", "공식 웹·예약"),
-    ("review_media", "리뷰·언론·기타"),
+    ("review_media", "리뷰·언론"),
+    ("unclassified", "미분류"),
 ]
 CITATION_LABELS = dict(CITATION_CHANNELS)
 CITATION_ORDER = {key: index for index, (key, _label) in enumerate(CITATION_CHANNELS)}
@@ -205,8 +208,19 @@ def parse_search_query(query: str) -> dict[str, Any]:
         known_area = token in _LOCATION_CITIES or token in _LOCATION_AREAS
         if known_area:
             location_parts.append(token)
-        elif _industry_token_of(token) and not industry:
-            industry = token
+        elif _industry_token_of(token):
+            keywords = sorted(_INDUSTRY_KEYWORDS, key=lambda word: (-len(word), word))
+            keyword = next(word for word in keywords if word in token)
+            remainder = re.sub(r"^(수제|스페셜티|동네|전문)", "", token)
+            remainder = re.sub(r"(전문점|매장|샵|숍)$", "", remainder)
+            for word in keywords:
+                remainder = remainder.replace(word, "")
+            if remainder:
+                # 업종의 위치와 관계없이 버거킹·커피빈·우태하피부과 같은 상호를 보존한다.
+                store_parts.append(token)
+                industry = industry or keyword
+            elif not industry:
+                industry = token
         elif _is_location_token(token):
             location_parts.append(token)
         else:
@@ -362,7 +376,7 @@ _CHANNEL_ALIASES = {
 def _clamp_score(value: Any, default: int = 50) -> int:
     try:
         number = round(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(0, min(100, number))
 
@@ -375,37 +389,115 @@ def _as_list(value: Any) -> list[Any]:
     return []
 
 
+def _web_url(value: Any) -> str:
+    """출처 링크와 이미지에는 자격 증명 없는 HTTP(S) URL만 허용한다."""
+    url = str(value or "").strip()
+    if any(char.isspace() for char in url) or "\\" in url:
+        return ""
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
+            return ""
+        _ = parts.port
+    except ValueError:
+        return ""
+    return url
+
+
 def _normalize_source(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        raw = {"url": raw}
     if not isinstance(raw, dict):
-        if isinstance(raw, str) and raw.startswith("http"):
-            host = raw.split("/")[2] if "//" in raw else ""
-            return {
-                "title": raw,
-                "url": raw,
-                "hostname": host,
-                "faviconUrl": f"https://www.google.com/s2/favicons?domain={host}&sz=64",
-                "description": "",
-                "date": "",
-                "demo": False,
-                "origin": "model",
-                "channel": None,
-            }
         return None
-    url = str(raw.get("url") or "").strip()
-    if not url.startswith("http"):
+    url = _web_url(raw.get("url"))
+    if not url:
         return None
-    host = str(raw.get("hostname") or (url.split("/")[2] if "//" in url else ""))
+    host = urlsplit(url).hostname or ""
     return {
         "title": str(raw.get("title") or url),
         "url": url,
         "hostname": host,
-        "faviconUrl": raw.get("faviconUrl") or f"https://www.google.com/s2/favicons?domain={host}&sz=64",
+        "faviconUrl": _web_url(raw.get("faviconUrl")) or f"https://www.google.com/s2/favicons?domain={host}&sz=64",
         "description": str(raw.get("description") or ""),
         "date": str(raw.get("date") or ""),
         "demo": bool(raw.get("demo", False)),
         "origin": raw.get("origin", "model"),
         "channel": raw.get("channel") or None,
     }
+
+
+def _compact_signal(text: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", unquote(str(text)).lower())
+
+
+def _location_signals(location: str) -> list[str]:
+    tokens = re.findall(r"[가-힣]+[0-9]*[가-힣]*", location)
+    specific = [word for word in tokens if word in _LOCATION_AREAS or re.search(r"(동[0-9]*가?|역)$", word)]
+    candidates = specific or [word for word in tokens if word not in _LOCATION_CITIES]
+    signals = []
+    for word in candidates:
+        core = word if word in _LOCATION_AREAS else re.sub(r"(특별시|광역시|시|구|동[0-9]*가?|역)$", "", word)
+        if len(core) >= 2 and core not in _LOCATION_CITIES and core not in signals:
+            signals.append(core)
+    return signals
+
+
+def _store_signals(audit: AuditInput) -> list[str]:
+    # 지점·업종 표기를 걷어낸 고유 상호만 매장 일치 근거로 사용한다.
+    value = audit.store_name
+    locations = re.findall(r"[가-힣]+", audit.location)
+    for word in sorted(locations, key=len, reverse=True):
+        core = word if word in _LOCATION_AREAS else re.sub(r"(특별시|광역시|시|구|동|역)$", "", word)
+        if len(core) >= 2:
+            value = value.replace(core, " ")
+    value = re.sub(r"(?:본점|지점)(?=\s|$)", " ", value)
+    value = re.sub(r"(?<!\S)점(?=\s|$)", " ", value)
+    previous = None
+    while value != previous:
+        previous = value
+        for suffix in sorted(_INDUSTRY_KEYWORDS, key=len, reverse=True):
+            value = re.sub(re.escape(suffix) + r"(?=\s|$)", " ", value)
+    return [
+        _compact_signal(word) for word in value.split()
+        if len(_compact_signal(word)) >= 2 and word not in _INDUSTRY_KEYWORDS
+    ]
+
+
+def filter_store_sources(audit: AuditInput, sources: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """상호는 제목·URL에, 상권은 제목·요약·URL에 있어야 대상 매장 자료로 사용한다.
+
+    문서 전체나 운영 주체를 검증했다는 뜻은 아니다. 누락 가능성이 있는 보수적 문자열 판정이다.
+    """
+    locations = _location_signals(audit.location)
+    stores = _store_signals(audit)
+    industries = [word for word in _INDUSTRY_KEYWORDS if word in audit.industry]
+    target_location = _compact_signal(audit.location)
+    known_places = _LOCATION_CITIES | _LOCATION_AREAS
+    matched, excluded = [], []
+    for source in sources:
+        title = str(source.get("title") or "")
+        title_location_match = any(_compact_signal(word) in _compact_signal(title) for word in locations)
+        other_branch = any(
+            _compact_signal(place) not in target_location
+            and re.search(re.escape(place) + r"\s*점(?=$|[^가-힣a-zA-Z0-9]|은|는|이|의|을|를|에|으로|과|와)", title)
+            for place in known_places
+        )
+        if other_branch and not title_location_match:
+            # 다른 지점 공지의 요약에 대상 지역이 언급돼도 대상 매장의 운영 정보로 쓰지 않는다.
+            excluded.append(source)
+            continue
+        text = _compact_signal(" ".join(str(source.get(key) or "") for key in ("title", "description", "url")))
+        identity = _compact_signal(" ".join(str(source.get(key) or "") for key in ("title", "url")))
+        location_match = bool(locations) and any(_compact_signal(word) in text for word in locations)
+        if audit.store_name:
+            subject_match = bool(stores) and any(word in identity for word in stores)
+        else:
+            subject_match = any(_compact_signal(word) in text for word in industries)
+        if location_match and subject_match:
+            matched.append(source)
+        else:
+            excluded.append(source)
+    return matched, excluded
 
 
 def _normalize_scores(raw: Any) -> list[dict[str, Any]]:
@@ -461,16 +553,12 @@ def _normalize_gaps(raw: Any, known_urls: dict[str, dict[str, Any]]) -> list[dic
         resolved: list[dict[str, Any]] = []
         for url in urls:
             url = url.strip()
-            if not url.startswith("http") or url in url_list:
+            if not _web_url(url) or url in url_list:
                 continue
-            url_list.append(url)
             source = known_urls.get(url)
             if source:
+                url_list.append(url)
                 resolved.append(source)
-            else:
-                minimal = _normalize_source(url)
-                if minimal:
-                    resolved.append(minimal)
         severity = str(item.get("severity") or "medium").lower()
         if severity not in ("high", "medium", "low"):
             severity = "medium"
@@ -505,6 +593,8 @@ def _normalize_contents(raw: Any) -> list[dict[str, Any]]:
         hashtags = item.get("hashtags") or []
         if isinstance(hashtags, str):
             hashtags = [tag.strip() for tag in hashtags.replace(",", " ").split() if tag.strip()]
+        if not isinstance(hashtags, list):
+            hashtags = []
         by_channel[channel] = {
             "channel": channel,
             "channel_label": CHANNEL_LABELS[channel],
@@ -517,6 +607,54 @@ def _normalize_contents(raw: Any) -> list[dict[str, Any]]:
     return [by_channel[c] for c in CHANNEL_ORDER if c in by_channel] + [
         item for item in by_channel.values() if item["channel"] not in CHANNEL_ORDER
     ]
+
+
+def _validate_router_analysis(analysis: dict[str, Any], known_urls: dict[str, dict[str, Any]]) -> None:
+    """HTTP 성공과 별개로 화면에 필요한 실제 진단 결과가 있는지 확인한다."""
+    raw_scores = analysis.get("scores")
+    if isinstance(raw_scores, dict):
+        score_items = [
+            {"key": key, **value} if isinstance(value, dict) else {"key": key, "score": value}
+            for key, value in raw_scores.items()
+        ]
+    else:
+        score_items = raw_scores if isinstance(raw_scores, list) else []
+    score_keys = set()
+    for item in score_items:
+        if not isinstance(item, dict):
+            continue
+        key_raw = str(item.get("key") or item.get("name") or item.get("label") or "").strip().lower()
+        key = _SCORE_ALIASES.get(key_raw) or _SCORE_ALIASES.get(str(item.get("label") or "").strip())
+        try:
+            score = float(item.get("score", item.get("value")))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if key and math.isfinite(score) and 0 <= score <= 100:
+            score_keys.add(key)
+    # 정규화가 dict·숫자를 str로 바꾸기 전에 핵심 원문의 타입을 확인한다.
+    required_texts = [analysis.get("summary")]
+    for gap in _as_list(analysis.get("gaps")):
+        if isinstance(gap, dict):
+            required_texts.extend([gap.get("title"), gap.get("reason") or gap.get("missing_reason")])
+    for item in _as_list(analysis.get("contents")):
+        if isinstance(item, dict):
+            required_texts.extend([
+                item.get("title"), item.get("body") or item.get("content") or item.get("copy")
+            ])
+    gaps = _normalize_gaps(analysis.get("gaps"), known_urls)
+    contents = _normalize_contents(analysis.get("contents"))
+    if (
+        score_keys != set(DIMENSION_LABELS)
+        or any(not isinstance(text, str) or not text.strip() for text in required_texts)
+        or len(gaps) != 3
+        or any(not gap["reason"] for gap in gaps)
+        or len(contents) != 3
+        or any(not item["body"] for item in contents)
+    ):
+        raise LinerAPIError(
+            "Liner Router 진단 결과가 불완전합니다. 잠시 후 다시 시도해 주세요.",
+            endpoint="chat.completions",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -595,14 +733,14 @@ def classify_channel(url: str, hint: str | None = None) -> str:
     """출처 URL 하나를 인용 채널로 분류한다.
 
     `hint`(데모 픽스처가 선언한 채널)가 있으면 그것을 먼저 믿고, 없으면 호스트 도메인으로 판단한다.
-    어느 규칙에도 걸리지 않는 도메인(뉴스·기타)은 `review_media`로 둔다.
+    어느 규칙에도 걸리지 않는 도메인은 `unclassified`로 둔다. 매장 공식 사이트로 추정하지 않는다.
     """
     hinted = citation_key(hint)
     if hinted:
         return hinted
     host = _host_of(str(url or ""))
     if not host:
-        return "review_media"
+        return "unclassified"
     if host == "search.naver.com" or host.endswith(".search.naver.com"):
         lowered = str(url).lower()
         if "where=blog" in lowered or "section=blog" in lowered:
@@ -612,7 +750,7 @@ def classify_channel(url: str, hint: str | None = None) -> str:
     for key, domains in CITATION_DOMAINS.items():
         if any(host == domain or host.endswith("." + domain) for domain in domains):
             return key
-    return "review_media"
+    return "unclassified"
 
 
 def _shares(counts: dict[str, int], total: int) -> dict[str, float]:
@@ -637,7 +775,7 @@ def build_citation_analysis(sources: list[dict[str, Any]]) -> dict[str, Any]:
     total = 0
     for source in sources:
         url = str(source.get("url") or "").strip()
-        if not url.startswith("http") or url in seen:
+        if not _web_url(url) or url in seen:
             continue
         seen.add(url)
         key = classify_channel(url, source.get("channel"))
@@ -662,7 +800,7 @@ def build_citation_analysis(sources: list[dict[str, Any]]) -> dict[str, Any]:
         cited = [c for c in channels if c["count"]]
         breakdown = ", ".join(f"{c['label']} {c['share_pct']}%({c['count']}건)" for c in cited)
         summary = (
-            f"Liner Search·Search Agent가 인용한 출처 {total}건 중 "
+            f"Liner 검색 결과·Search Agent 인용 출처(자동 수집 포함) {total}건 중 "
             f"{cited[0]['label']}가 {cited[0]['share_pct']}%로 가장 많습니다. {breakdown}."
         )
     else:
@@ -691,17 +829,17 @@ def _recommend_reason(channel: dict[str, Any], rank: int) -> str:
     action = _RECOMMEND_ACTIONS.get(channel["channel"], "이 채널의 정보를 먼저 보완하세요.")
     if channel.get("count"):
         lead = (
-            f"Liner 인용 비중 {channel['share_pct']}%({channel['count']}건)로 "
-            f"인용 순위 {rank}위 채널입니다."
+            f"Liner 출처 비중 {channel['share_pct']}%({channel['count']}건)로 "
+            f"수집 출처 비중 {rank}위 채널입니다."
         )
     else:
-        lead = "수집된 인용이 거의 없어 상대적으로 가장 비어 있는 채널입니다."
+        lead = "이번에 수집한 출처에 이 채널이 없습니다. 실제 매장 노출이 없다는 뜻은 아닙니다."
     return f"{lead} {action}"
 
 
 def _fallback_recommendations(citation: dict[str, Any]) -> list[dict[str, Any]]:
     """Router가 추천을 주지 못해도 인용 비중으로 항상 3개 추천을 만든다."""
-    channels = list(citation.get("channels") or [])
+    channels = [item for item in citation.get("channels") or [] if item["channel"] != "unclassified"]
     ranked = sorted(
         channels,
         key=lambda item: (-int(item.get("count") or 0), CITATION_ORDER.get(item["channel"], 99)),
@@ -823,6 +961,7 @@ def build_collection_queries(audit: AuditInput) -> list[str]:
     second = _unique_join(
         audit.store_name or audit.location,
         audit.industry,
+        audit.location,
         "네이버 플레이스 인스타그램 블로그",
     )
     queries: list[str] = []
@@ -854,6 +993,9 @@ def summarize_collected_channels(
     titles = [title for title in titles if title]
     if titles:
         parts.append("주요 노출: " + " / ".join(titles) + ".")
+    excerpts = [f"{source['title']}: {source['description'][:500]}" for source in sources[:6] if source.get("description")]
+    if excerpts:
+        parts.append("검색 요약: " + " / ".join(excerpts))
     if demo:
         parts.append("(데모 모드: 가상 상권 검색 결과로 구성한 요약입니다.)")
     return " ".join(parts)
@@ -866,7 +1008,11 @@ def summarize_collected_channels(
 ROUTER_SYSTEM_PROMPT = (
     "너는 오프라인 매장의 외부 채널(인스타그램·네이버 플레이스·블로그)을 진단하는 상권 마케팅 분석가다. "
     "주어진 상권 검색 수요와 현재 채널 텍스트를 대조해, 고객이 방문 전에 확인하려는 정보 중 채널에 없는 "
-    "것을 결핍으로 진단하고, 즉시 발행 가능한 보완 콘텐츠를 쓴다.\n\n"
+    "것을 확인할 항목으로 정리하고, 사실 확인 후 사용할 콘텐츠 초안을 쓴다. "
+    "검색 자료에서 확인하지 못했다는 사실을 매장에 실제로 없다는 뜻으로 단정하지 않는다. "
+    "다른 지역·다른 지점의 정보를 해당 매장 사실로 쓰지 않는다. "
+    "제공된 출처 제목·요약 또는 사용자가 입력한 글에서 확인되지 않은 가격·주소·시간·효과 등은 "
+    "반드시 [확인 필요]로 표시한다.\n\n"
     "반드시 아래 JSON 객체 하나만 출력한다. 설명 문장, 마크다운, 코드펜스를 붙이지 않는다.\n"
     "{\n"
     '  "overall_score": 0~100 정수,\n'
@@ -897,7 +1043,7 @@ ROUTER_SYSTEM_PROMPT = (
     "규칙: gaps는 정확히 3개, recommended_channels는 정확히 3개(인용 비중이 높은 채널부터 rank 1~3), "
     "contents는 instagram·naver_place·blog_faq 각 1개. "
     "recommended_channels의 reason에는 반드시 제공된 인용 비중 수치를 포함한다. "
-    "인용 비중은 Liner Search·Liner Search Agent가 상권 질문에 실제로 인용한 출처를 채널별로 집계한 값이며, "
+    "출처 비중은 Liner 검색 결과·Search Agent 인용 출처(자동 수집 포함)를 URL 중복 제거 후 집계한 값이다. "
     "GPT·Perplexity·Gemini·Claude 등 다른 AI의 인용을 뜻하지 않는다. "
     "source_urls에는 제공된 출처 목록의 URL만 쓴다. 본문은 실제로 발행할 수 있는 완성된 한국어 문장으로 쓰고, "
     "확인되지 않은 수치를 지어내지 말고 [확인 필요] 표기를 쓴다. 의료·법률 등 규제 업종이면 "
@@ -915,7 +1061,7 @@ def _router_user_prompt(
     collected: dict[str, Any] | None = None,
 ) -> str:
     source_lines = "\n".join(
-        f"- {src['title']} | {src['url']}" for src in sources[:12]
+        f"- {src['title']} | {src['url']} | {src.get('description', '')[:500]}" for src in sources[:12]
     ) or "- (수집된 출처 없음)"
     citation = citation or {}
     cited = [item for item in citation.get("channels", []) if item.get("count")]
@@ -935,7 +1081,7 @@ def _router_user_prompt(
         f"[업종] {audit.industry}\n"
         f"[상권 검색 쿼리] {', '.join(queries)}\n\n"
         f"[상권 고객 수요 요약]\n{demand_answer}\n\n"
-        f"[Liner 인용 출처 비중 — Liner Search · Liner Search Agent {citation.get('total', 0)}건]\n{citation_lines}\n\n"
+        f"[Liner 출처 비중 — 검색 결과·Search Agent 인용(자동 수집 포함) {citation.get('total', 0)}건]\n{citation_lines}\n\n"
         f"[매장 공개 채널 현황]\n{collected_block}\n\n"
         f"[수집된 출처]\n{source_lines}\n\n"
         f"[현재 외부 채널 텍스트]\n{channel_text[:6000] or '(직접 입력 없음 — 공개 채널 자동 수집 결과로 대신합니다)'}\n\n"
@@ -991,9 +1137,17 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
 
     client = LinerClient(api_key=audit.api_key)
     live = client.live
-    using_demo = not live
+    using_demo = not live and os.environ.get("GEO_AUDITOR_TEST_DEMO") == "1"
+    if not live and not using_demo:
+        raise LinerAPIError("실제 매장 검색에 필요한 Liner API 키가 없습니다. API 설정에서 키를 입력해 주세요.")
+    if not using_demo and (
+        not audit.store_name.strip() or not audit.location.strip()
+        or (audit.location == audit.store_name and audit.industry == FALLBACK_INDUSTRY)
+    ):
+        raise ValueError("동네와 실제 매장 이름을 함께 입력해 주세요.")
     degraded = False
     warnings: list[str] = []
+    excluded_urls: set[str] = set()
 
     manual_text = audit.channel_text.strip()
     collect_queries = (
@@ -1014,16 +1168,6 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
             )
     steps: list[dict[str, Any]] = []
 
-    def fallback(reason: str, step_no: int) -> None:
-        nonlocal using_demo, degraded, demo_payload
-        degraded = True
-        using_demo = True
-        if demo_payload is None:
-            demo_payload = _demo_payload(audit, queries)
-        warnings.append(
-            f"{STEP_TITLES[step_no - 1]} 단계에서 Liner API 호출이 실패해 데모 데이터로 대체했습니다: {reason}"
-        )
-
     # ---------------- Step 1 : Liner Search (+ 공개 채널 자동 수집) ----------------
     step_started = time.perf_counter()
     await _emit(emit, type="step", index=1, status="running", title=STEP_TITLES[0],
@@ -1039,15 +1183,8 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
             client.record("search.web", mode="demo", status="ok", latency_ms=0,
                           detail=f"query={query}")
         else:
-            try:
-                response = await client.search(query, max_results=audit.max_results)
-            except LinerAPIError as exc:
-                fallback(str(exc), 1)
-                demo_results = (demo_payload or {}).get("search", {}).get(query, [])
-                results = [s for s in (_normalize_source(r) for r in demo_results) if s]
-                client.record("search.web", mode="demo", status="fallback", latency_ms=0, detail=str(exc))
-            else:
-                results = [s for s in (_normalize_source({**r, "origin": "search"}) for r in response.get("results", [])) if s]
+            response = await client.search(query, max_results=audit.max_results)
+            results = [s for s in (_normalize_source({**r, "origin": "search"}) for r in response.get("results", [])) if s]
         for source in results:
             source["origin"] = "search"
         search_sources.extend(results)
@@ -1066,23 +1203,14 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
                 client.record("search.web", mode="demo", status="ok", latency_ms=0,
                               detail=f"collect query={query}")
             else:
-                try:
-                    response = await client.search(
-                        query, max_results=min(audit.max_results, 6), detail=f"collect query={query}"
-                    )
-                except LinerAPIError as exc:
-                    warnings.append(
-                        f"공개 채널 자동 수집 검색이 실패했습니다('{query}'): {exc}"
-                    )
-                else:
-                    results = [
-                        s
-                        for s in (
-                            _normalize_source({**r, "origin": "collect"})
-                            for r in response.get("results", [])
-                        )
-                        if s
-                    ]
+                response = await client.search(
+                    query, max_results=min(audit.max_results, 6), detail=f"collect query={query}"
+                )
+                results = [
+                    s for s in (
+                        _normalize_source({**r, "origin": "collect"}) for r in response.get("results", [])
+                    ) if s
+                ]
             for source in results:
                 source["origin"] = "collect"
             collected_raw.extend(results)
@@ -1094,6 +1222,11 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
             continue
         collected_seen.add(source["url"])
         collected_sources.append(source)
+
+    if not using_demo:
+        search_sources, excluded_search = filter_store_sources(audit, search_sources)
+        collected_sources, excluded_collect = filter_store_sources(audit, collected_sources)
+        excluded_urls.update(source["url"] for source in excluded_search + excluded_collect)
 
     collected_summary = summarize_collected_channels(
         collected_sources, collect_queries, demo=using_demo
@@ -1180,22 +1313,29 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
             {
                 "role": "user",
                 "content": (
-                    f"{audit.location} {audit.industry} 상권에서 고객이 방문 전에 확인하려는 정보와 자주 묻는 질문을 "
-                    "5개 이내로 정리해줘. 출처를 인용하고, 마지막에 현재 채널에 빠졌을 가능성이 큰 정보를 짚어줘.\n\n"
+                    f"{audit.location}의 {audit.display_name}({audit.industry})에 대해 고객이 방문 전에 확인하려는 정보와 질문을 "
+                    "5개 이내로 정리해줘. 매장명과 상권이 함께 일치하는 출처만 인용하고 다른 지점·다른 업종을 제외해줘. "
+                    "확인되지 않은 매장 사실은 추정하지 말고 확인 필요로 표시해줘.\n\n"
                     f"현재 채널 요약: {diagnosis_text[:1200] or '(직접 입력 없음 — 공개 채널 자동 수집 결과 참고)'}"
                 ),
             }
         ]
-        try:
-            agent = await client.search_agent(agent_messages)
-        except LinerAPIError as exc:
-            fallback(str(exc), 2)
-            agent = (demo_payload or {}).get("agent", {})
+        agent = await client.search_agent(agent_messages)
         agent_answer = str(agent.get("answer") or "")
         agent_references = [
             s for s in (_normalize_source({**r, "origin": "agent"}) for r in agent.get("references", [])) if s
         ]
 
+    if not using_demo:
+        agent_references, excluded_agent = filter_store_sources(audit, agent_references)
+        excluded_urls.update(source["url"] for source in excluded_agent)
+        if excluded_agent or not agent_references:
+            # 검증되지 않은 지점·업종 정보를 요약을 통해 다시 모델에 전달하지 않는다.
+            relevant = agent_references or search_sources or collected_sources
+            agent_answer = "\n".join(
+                f"{source['title']}: {source.get('description', '')[:500]}" for source in relevant[:6]
+            )
+            warnings.append("에이전트 요약의 출처를 충분히 확인하지 못해 일치하는 검색 자료로 대체했습니다.")
     if using_demo:
         await _demo_pause()
     step2_ms = int((time.perf_counter() - step_started) * 1000)
@@ -1218,6 +1358,22 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
             continue
         seen.add(source["url"])
         all_sources.append(source)
+    if not using_demo and not all_sources:
+        raise LinerAPIError(
+            "입력한 매장과 상권이 함께 확인되는 공개 자료를 찾지 못했어요. 정확한 지점명·동네로 다시 검색해 주세요."
+        )
+    excluded_urls.difference_update(source["url"] for source in all_sources)
+    store_evidence = {
+        "matched_source_count": len(all_sources),
+        "excluded_source_count": len(excluded_urls),
+        "sources": all_sources,
+        "summary": (
+            "오프라인 테스트용 가상 자료입니다." if using_demo else
+            "매장명과 동네가 함께 나오는 검색 자료예요. 운영 정보는 매장에서 한 번 더 확인해 주세요."
+        ),
+    }
+    if excluded_urls:
+        warnings.append(f"매장·상권 일치 신호가 없는 출처 {len(excluded_urls)}건을 진단에서 제외했습니다.")
     known_urls = {s["url"]: s for s in all_sources}
     citation_analysis = build_citation_analysis(all_sources)
 
@@ -1249,9 +1405,16 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         try:
             completion = await client.chat_completions(messages)
             analysis = client.parse_json_content(completion)
-        except LinerAPIError as exc:
-            fallback(str(exc), 3)
-            analysis = dict((demo_payload or {}).get("analysis", {}))
+            _validate_router_analysis(analysis, known_urls)
+        except LinerAPIError:
+            # HTTP 200이어도 JSON 파싱·진단 검증 실패는 성공한 호출로 표시하지 않는다.
+            router_call = next(
+                (call for call in reversed(client.calls) if call["endpoint"] == "chat.completions"), None
+            )
+            if router_call is not None and router_call["status"] == "ok":
+                router_call["status"] = "error"
+                router_call["detail"] = "invalid_response"
+            raise
 
     scores = _normalize_scores(analysis.get("scores"))
     for item in scores:
@@ -1262,10 +1425,8 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
     contents = _normalize_contents(analysis.get("contents"))
     recommendations = _normalize_recommendations(analysis.get("recommended_channels"), citation_analysis)
     apply_content_priority(contents, recommendations)
-    for gap in gaps:
-        if not gap["sources"]:
-            gap["sources"] = all_sources[:2]
-            gap["source_urls"] = [s["url"] for s in gap["sources"]]
+    if any(not gap["sources"] for gap in gaps):
+        warnings.append("일부 확인 항목은 개별 출처 연결이 없어 직접 확인이 필요합니다.")
 
     if len(gaps) != 3:
         warnings.append(f"결핍이 3개가 아닌 {len(gaps)}개로 반환되었습니다.")
@@ -1273,8 +1434,6 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         warnings.append(f"콘텐츠가 3종이 아닌 {len(contents)}종으로 반환되었습니다.")
     if not citation_analysis["total"]:
         warnings.append("분석할 출처가 없어 인용 비중을 계산하지 못했습니다.")
-    if degraded:
-        warnings.append("일부 단계가 데모 데이터로 대체되었습니다. 화면의 DEMO 배지와 파이프라인 로그를 확인하세요.")
 
     if using_demo:
         await _demo_pause()
@@ -1317,6 +1476,7 @@ async def run_audit(audit: AuditInput, emit: Emit | None = None) -> dict[str, An
         },
         "queries": queries,
         "collected_channel": collected_channel,
+        "store_evidence": store_evidence,
         "citation_analysis": citation_analysis,
         "recommended_channels": recommendations,
         "demand": {"answer": agent_answer, "references": agent_references},

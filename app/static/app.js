@@ -25,6 +25,8 @@
     apiPanel: $('#api-panel'),
     progress: $('#progress'),
     stepList: $('#step-list'),
+    progressHint: $('#progress-hint'),
+    cancelBtn: $('#cancel-btn'),
     results: $('#results'),
     error: $('#error'),
     errorDetail: $('#error-detail'),
@@ -32,7 +34,7 @@
     modeLabel: $('#mode-label'),
   };
 
-  const state = { running: false, result: null, tab: 'instagram', copyStore: [] };
+  const state = { running: false, result: null, tab: 'instagram', copyStore: [], controller: null };
 
   /* 진행 단계는 짧은 제목만 노출한다. 세부 수치는 결과의 '자세히 보기'에 있다. */
   const STEP_DEFS = ['상권 검색', '고객 기대 정보 분석', '빠진 정보 · 콘텐츠 진단'];
@@ -82,20 +84,22 @@
   function showError(message) {
     els.errorDetail.textContent = message;
     showPanel('error');
+    els.error.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   function setRunning(running) {
     state.running = running;
+    els.form.setAttribute('aria-busy', String(running));
     els.runBtn.disabled = running;
     els.runBtn.classList.toggle('is-loading', running);
     els.runLabel.textContent = running ? '진단 중' : '진단 시작하기';
     $$('.pill', els.sampleList).forEach((btn) => { btn.disabled = running; });
   }
 
-  function setMode(mode) {
+  function setMode(mode, degraded = false) {
     const live = mode === 'live';
-    els.modeBadge.dataset.mode = live ? 'live' : 'demo';
-    els.modeLabel.textContent = live ? 'LIVE' : 'DEMO';
+    els.modeBadge.dataset.mode = degraded ? 'fallback' : live ? 'live' : 'demo';
+    els.modeLabel.textContent = degraded ? (live ? 'LIVE · 일부 실패' : 'DEMO FALLBACK') : live ? 'LIVE' : 'API 키 필요';
   }
 
   function togglePanel(button, panel) {
@@ -145,7 +149,15 @@
   /* ------------------------------------------------------------------ */
   async function runAudit(payload) {
     if (state.running) return;
+    window.CardStudio?.cancel();
     setRunning(true);
+    state.controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; state.controller?.abort(); }, 420000);
+    els.progressHint.textContent = '공개 정보를 확인하고 있어요.';
+    const slowHint = setTimeout(() => {
+      els.progressHint.textContent = '아직 분석 중이에요. 콘텐츠 생성까지 몇 분 걸릴 수 있어요.';
+    }, 20000);
     state.result = null;
     state.copyStore = [];
     if (payload.query != null) els.query.value = payload.query;
@@ -160,14 +172,20 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: state.controller.signal,
       });
       if (!response.ok) {
         throw new Error(await describeHttpError(response));
       }
       await consumeStream(response);
     } catch (error) {
-      showError(error.message || '네트워크 오류가 발생했어요.');
+      showError(error.name === 'AbortError'
+        ? (timedOut ? '응답 시간이 너무 길어 중단했어요. 잠시 후 다시 시도해 주세요.' : '진단을 중단했어요. 검색어를 바꿔 다시 시작할 수 있어요.')
+        : '진단을 완료하지 못했어요. ' + (error.message || '연결 상태를 확인하고 다시 시도해 주세요.'));
     } finally {
+      clearTimeout(timeout);
+      clearTimeout(slowHint);
+      state.controller = null;
       setRunning(false);
     }
   }
@@ -237,22 +255,48 @@
   /* 결과 — 4개 카드 + 접힌 상세                                        */
   /* ------------------------------------------------------------------ */
   function renderResult(r) {
-    setMode(r.mode);
+    setMode(r.mode, r.degraded);
     const prioritized = (r.contents || []).find((c) => c.priority_badge);
     state.tab = prioritized?.channel || r.contents?.[0]?.channel || 'instagram';
 
     els.results.innerHTML = [
+      renderNotice(r),
+      renderEvidence(r),
       renderScore(r),
       renderCitation(r),
       renderGaps(r),
       renderContents(r),
+      '<section id="card-studio" class="card"></section>',
       renderDetail(r),
     ].join('');
     showPanel('results');
+    window.CardStudio?.render(r);
     bindTabs();
     bindCopyButtons();
     animateBars();
     els.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderNotice(r) {
+    const warnings = r.warnings || [];
+    if (r.degraded || warnings.length) {
+      const title = r.degraded && r.mode === 'demo' ? '일부 결과는 데모예요' : '결과를 확인해 주세요';
+      return `<section class="card notice-card" role="alert"><h2 class="card-title">${title}</h2>
+        <p>${esc(warnings[0] || '일부 정보를 확인하지 못했어요. 잠시 후 다시 진단해 주세요.')}</p>
+        ${r.mode === 'demo' ? '<p>실제 매장 진단으로 사용하지 마세요. 다시 진단하려면 위의 시작 버튼을 눌러 주세요.</p>' : ''}</section>`;
+    }
+    return '';
+  }
+
+  function renderEvidence(r) {
+    const evidence = r.store_evidence;
+    if (!evidence) return '';
+    const sources = evidence.sources || [];
+    return `<section class="card evidence-card">
+      <h2 class="card-title">검색으로 확인한 매장 자료</h2>
+      <p class="source-scope">${esc(evidence.summary || '검색된 공개 자료를 바탕으로 제안해요. 정보가 없으면 확인이 필요하다고 표시해요.')}</p>
+      ${sources.slice(0, 3).map((src) => `<a class="evidence-link" href="${esc(src.url)}" target="_blank" rel="noreferrer">${esc(src.title || src.hostname)}</a>`).join('')}
+    </section>`;
   }
 
   function renderScore(r) {
@@ -283,7 +327,9 @@
   function renderCitation(r) {
     const citation = r.citation_analysis;
     const channels = citation?.channels || [];
-    if (!citation || !channels.length || !citation.total) return '';
+    if (!citation || !channels.length || !citation.total) return `<section class="card">
+      <h2 class="card-title">Liner 출처 비중</h2>
+      <p class="empty-message">분석할 출처를 찾지 못했어요. 매장 이름을 더 정확히 입력하거나 채널 글을 직접 넣어 주세요.</p></section>`;
 
     const segments = channels
       .filter((channel) => channel.count > 0)
@@ -303,9 +349,10 @@
     return `
     <section class="card">
       <div class="card-head">
-        <h2 class="card-title">인용 채널 비중</h2>
+        <h2 class="card-title">Liner 출처 비중</h2>
         <span class="card-meta">출처 ${citation.total}건</span>
       </div>
+      <p class="source-scope">검색 결과·에이전트 인용 출처 기준 · URL 중복 제외</p>
       <p class="cite-top">
         <span class="cite-top-label">${esc(citation.top_label || '')}</span>
         <span class="cite-top-share">${fmtPct(citation.top_share_pct)}%</span>
@@ -317,7 +364,7 @@
 
   function renderGaps(r) {
     const gaps = r.gaps || [];
-    if (!gaps.length) return '';
+    if (!gaps.length) return '<section class="card"><h2 class="card-title">빠진 정보</h2><p class="empty-message">진단 내용을 받지 못했어요. 다시 진단해 주세요.</p></section>';
     const items = gaps.map((gap, index) => `
       <li class="gap-item">
         <span class="gap-num">${index + 1}</span>
@@ -339,7 +386,7 @@
 
   function renderContents(r) {
     const contents = r.contents || [];
-    if (!contents.length) return '';
+    if (!contents.length) return '<section class="card"><h2 class="card-title">콘텐츠 초안</h2><p class="empty-message">콘텐츠를 만들지 못했어요. 다시 진단해 주세요.</p></section>';
     state.copyStore = contents.map((c) => c.body || '');
     const active = contents.some((c) => c.channel === state.tab) ? state.tab : contents[0].channel;
     const top = (r.recommended_channels || [])[0];
@@ -371,7 +418,7 @@
     <section class="card">
       <div class="card-head">
         <h2 class="card-title">추천 채널 콘텐츠</h2>
-        <span class="card-meta">복사해서 바로 발행</span>
+        <span class="card-meta">사실 확인 후 발행</span>
       </div>
       ${top ? `
       <p class="rec-line">
@@ -557,10 +604,12 @@
   els.toggleAdvanced.addEventListener('click', () => togglePanel(els.toggleAdvanced, els.advanced));
   els.toggleApi.addEventListener('click', () => togglePanel(els.toggleApi, els.apiPanel));
   els.channelText.addEventListener('input', syncChannelMeta);
+  els.cancelBtn.addEventListener('click', () => state.controller?.abort());
 
   $$('.pill', els.sampleList).forEach((btn) => {
     btn.addEventListener('click', () => {
       const query = btn.dataset.query || '';
+      [els.location, els.industry, els.storeName, els.channelText].forEach((field) => { field.value = ''; });
       els.query.value = query;
       const payload = {
         query,
@@ -574,6 +623,7 @@
       if (sampleId) payload.sample_id = sampleId;
       const apiKey = els.apiKey.value.trim();
       if (apiKey) payload.api_key = apiKey;
+      els.apiKey.value = '';
       hidePanels();
       runAudit(payload);
     });
@@ -601,6 +651,7 @@
     };
     const apiKey = els.apiKey.value.trim();
     if (apiKey) payload.api_key = apiKey;
+    els.apiKey.value = '';
     hidePanels();
     runAudit(payload);
   });

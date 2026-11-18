@@ -4,10 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geo Channel Auditor · 상권 채널 진단</title>
-  <meta name="description" content="동네와 매장을 한 줄로 입력하면 Liner Search·Search Agent가 인용한 채널을 분석해 빠진 정보 3가지와 발행용 콘텐츠를 만들어 드립니다." />
+  <meta name="description" content="동네와 매장을 한 줄로 입력하면 Liner 검색 결과·Search Agent 인용 출처를 분석해 빠진 정보 3가지와 발행용 콘텐츠를 만들어 드립니다." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%233182F6'/%3E%3Ccircle cx='16' cy='16' r='6.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='1.8' fill='%23fff'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/cards.css" />
 </head>
 <body>
 
@@ -23,7 +24,7 @@
     </a>
     <span id="mode-badge" class="mode-badge" data-mode="{{ 'live' if mode == 'live' else 'demo' }}">
       <i class="mode-dot" aria-hidden="true"></i>
-      <span id="mode-label">{{ 'LIVE' if mode == 'live' else 'DEMO' }}</span>
+      <span id="mode-label">{{ 'LIVE' if mode == 'live' else 'API 키 필요' }}</span>
     </span>
   </div>
 </header>
@@ -43,7 +44,7 @@
         <path d="m13.5 13.5 3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
       </svg>
       <input id="query" name="query" class="search-input" type="text" enterkeyhint="search"
-        placeholder="예: 성수동 모먼트 카페, 강남역 피부과" />
+        placeholder="예: 성수동 로우키 카페" />
     </div>
 
     <button type="submit" id="run-btn" class="cta">
@@ -51,9 +52,9 @@
     </button>
 
     <div class="quick-row" id="sample-list" aria-label="빠른 예시">
-      <button type="button" class="pill" data-query="성수동 카페" data-sample-id="seongsu-cafe">성수동 카페</button>
-      <button type="button" class="pill" data-query="서울대입구 피부과" data-sample-id="snu-derm">서울대입구 피부과</button>
-      <button type="button" class="pill" data-query="홍대 버거">홍대 버거</button>
+      {% for sample in samples %}
+      <button type="button" class="pill" data-query="{{ sample.query }}" data-sample-id="{{ sample.id }}">{{ sample.label }}</button>
+      {% endfor %}
     </div>
 
     <div class="toggle-row">
@@ -78,8 +79,8 @@
         </div>
       </div>
       <div class="field-block">
-        <label class="field-label" for="store_name">매장명 <span class="optional">선택</span></label>
-        <input id="store_name" name="store_name" class="text-field" placeholder="예: 모먼트 성수점" />
+        <label class="field-label" for="store_name">매장명</label>
+        <input id="store_name" name="store_name" class="text-field" placeholder="예: 로우키 성수점" />
       </div>
       <div class="field-block">
         <div class="field-label-row">
@@ -96,18 +97,19 @@
       <div class="field-block">
         <label class="field-label" for="api_key">Liner API 키 <span class="optional">선택</span></label>
         <input id="api_key" type="password" class="text-field" placeholder="lin_live_..." autocomplete="off" spellcheck="false" />
-        <p class="helper">이번 요청에만 쓰고 저장하지 않아요. 비워두면 서버 키를 쓰고, 없으면 데모로 진단합니다.</p>
+        <p class="helper">이번 요청에만 쓰고 저장하지 않아요. 비워두면 서버 키를 쓰고, 없으면 실제 검색을 시작할 수 없어요.</p>
       </div>
     </div>
   </form>
 
   <!-- 진행 -->
-  <section id="progress" class="card progress-card hidden">
+  <section id="progress" class="card progress-card hidden" role="status" aria-live="polite">
     <ol id="step-list" class="steps"></ol>
+    <div class="progress-actions"><p id="progress-hint" class="helper"></p><button type="button" id="cancel-btn" class="link-toggle">중단하기</button></div>
   </section>
 
   <!-- 오류 -->
-  <section id="error" class="card error-card hidden">
+  <section id="error" class="card error-card hidden" role="alert">
     <p class="error-title">진단을 마치지 못했어요</p>
     <p id="error-detail" class="error-detail"></p>
   </section>
@@ -123,6 +125,7 @@
 </footer>
 
 <script id="samples-data" type="application/json">{{ samples|tojson }}</script>
+<script src="/static/cards.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

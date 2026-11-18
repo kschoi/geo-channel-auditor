@@ -21,7 +21,7 @@ STYLES_CSS = ROOT / "app" / "static" / "styles.css"
 
 
 def _demo_result(client) -> dict:
-    sample = sample_data.SAMPLES[0]
+    sample = sample_data.DEMO_SAMPLES[0]
     response = client.post("/api/audit", json={"sample_id": sample["id"]})
     assert response.status_code == 200, response.text
     return response.json()
@@ -53,7 +53,7 @@ def test_index_embeds_parsable_sample_json(client):
     for sample in samples:
         for key in ("id", "label", "emoji", "store_name", "location", "industry", "channels", "one_liner"):
             assert key in sample, f"샘플에 {key}가 없습니다."
-        assert "instagram" in sample["channels"]
+        assert not any(sample["channels"].values()), "실제 매장 예시에 가상 채널 글이 들어가면 안 됩니다."
 
 
 def test_index_loads_static_assets(client):
@@ -89,8 +89,8 @@ def test_single_search_input_is_the_only_main_field(client):
     assert html.index('id="query"') < html.index('id="sample-list"')
     chips = re.findall(r'<button type="button" class="pill"[^>]*>([^<]+)</button>', html)
     assert len(chips) == 3, f"빠른 예시는 3개여야 합니다: {chips}"
-    for label in ("성수동 카페", "서울대입구 피부과", "홍대 버거"):
-        assert any(label in chip for chip in chips), f"{label} 예시가 없습니다."
+    for sample in sample_data.SAMPLES:
+        assert any(sample["label"] in chip for chip in chips), f"{sample['label']} 예시가 없습니다."
 
 
 def test_advanced_inputs_exist_but_are_hidden_by_toggle(client):
@@ -186,7 +186,8 @@ def test_audit_response_matches_frontend_contract(client):
     citation = body["citation_analysis"]
     for key in ("total", "summary", "channels", "top_channel", "top_label", "top_share_pct"):
         assert key in citation, f"citation_analysis.{key}가 없습니다."
-    assert len(citation["channels"]) == 5
+    assert len(citation["channels"]) == 6
+    assert any(channel["channel"] == "unclassified" for channel in citation["channels"])
     for channel in citation["channels"]:
         for key in ("channel", "label", "count", "share_pct", "domains", "urls"):
             assert key in channel, f"인용 채널에 {key}가 없습니다."

@@ -1,18 +1,79 @@
-"""심사위원 원클릭 시연용 가상 매장(Mock Store) 데이터.
+"""공개 매장 검색용 예시와 테스트 전용 가상 픽스처.
 
-주의
-----
-이 파일의 매장명·주소·채널 텍스트·수치는 **전부 가상**입니다. 실존 매장, 실제 고객,
-실제 사업자 정보를 포함하지 않습니다. 해커톤 규정(가상·공개 데이터만 사용)에 따라
-데모 모드의 Liner API 응답도 `app/demo_fixtures.py`의 가상 픽스처로 대체됩니다.
+SAMPLES에는 검색할 매장명과 상권만 둔다. 주소·운영시간·가격·채널 문구는 저장하지 않는다.
+DEMO_SAMPLES는 GEO_AUDITOR_TEST_DEMO=1인 오프라인 테스트에서만 조회할 수 있다.
+실행 앱은 API 키가 없거나 API가 실패하면 오류를 반환하며 가상 진단으로 대체하지 않는다.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-# 각 샘플의 채널 텍스트는 "매장이 실제로 운영 중인 외부 채널"을 가정한 가상 원고다.
+# 빠른 예시 — 실제 매장. 채널 문구는 비워 두고 공개 채널 자동 수집으로 진단한다.
 SAMPLES: list[dict[str, Any]] = [
+    {
+        "id": "seongsu-lowkey",
+        "label": "성수 로우키",
+        "emoji": "☕",
+        "store_name": "로우키 성수점",
+        "location": "서울 성동구 성수동",
+        "district": "성수동 연무장길",
+        "industry": "스페셜티 커피 로스터리 카페",
+        "category": "카페·디저트",
+        "query": "성수 로우키 카페",
+        "one_liner": "성수 로우키의 공개 자료를 검색합니다.",
+        "real": True,
+        "channels": {},
+        "queries": [
+            "성수 로우키 카페 메뉴 가격 디카페인",
+            "성수동 로우키 주차 웨이팅 영업시간",
+            "성수 카페 노트북 반려견 동반 로우키",
+        ],
+    },
+    {
+        "id": "snu-wootaeha-derm",
+        "label": "서울대입구 우태하피부과",
+        "emoji": "🩺",
+        "store_name": "관악우태하피부과의원",
+        "location": "서울 관악구 서울대입구",
+        "district": "서울대입구역 상권",
+        "industry": "피부과 의원",
+        "category": "의원·클리닉",
+        "query": "서울대입구 우태하피부과",
+        "one_liner": "서울대입구 우태하피부과의 공개 자료를 검색합니다.",
+        "real": True,
+        "channels": {},
+        "queries": [
+            "서울대입구 우태하피부과 비급여 가격",
+            "관악우태하피부과 진료시간 예약 대기",
+            "서울대입구역 피부과 여드름 치료 후기",
+        ],
+    },
+    {
+        "id": "hongdae-tastyburger",
+        "label": "홍대 테이스티버거",
+        "emoji": "🍔",
+        "store_name": "테이스티버거 홍대",
+        "location": "서울 마포구 홍대",
+        "district": "홍대 상권",
+        "industry": "수제버거",
+        "category": "외식·패스트푸드",
+        "query": "홍대 테이스티버거",
+        "one_liner": "홍대 테이스티버거의 공개 자료를 검색합니다.",
+        "real": True,
+        "channels": {},
+        "queries": [
+            "홍대 테이스티버거 메뉴 가격",
+            "홍대 테이스티버거 웨이팅 영업시간",
+            "홍대 수제버거 포장 배달 테이스티버거",
+        ],
+    },
+]
+
+
+# 데모 모드·테스트 전용 가상 매장. 채널 텍스트는 "매장이 운영 중인 외부 채널"을 가정한 가상 원고다.
+DEMO_SAMPLES: list[dict[str, Any]] = [
     {
         "id": "seongsu-cafe",
         "label": "성수동 스페셜티 카페",
@@ -128,8 +189,8 @@ SAMPLES: list[dict[str, Any]] = [
 
 
 def get_sample(sample_id: str) -> dict[str, Any] | None:
-    """샘플 ID로 가상 매장 프로필을 찾는다."""
-    for sample in SAMPLES:
+    """실제 매장 예시를 찾는다. 가상 픽스처는 명시적 오프라인 테스트에서만 허용한다."""
+    for sample in (*SAMPLES, *(DEMO_SAMPLES if os.environ.get("GEO_AUDITOR_TEST_DEMO") == "1" else [])):
         if sample["id"] == sample_id:
             return sample
     return None
@@ -145,6 +206,7 @@ def sample_brief(sample: dict[str, Any]) -> dict[str, Any]:
         "location": sample["location"],
         "industry": sample["industry"],
         "one_liner": sample["one_liner"],
+        "real": bool(sample.get("real")),
     }
 
 
@@ -153,7 +215,7 @@ def channel_text_of(sample: dict[str, Any]) -> str:
     labels = {"instagram": "[Instagram]", "naver_place": "[Naver Place]", "blog": "[Blog]"}
     parts = []
     for key in ("instagram", "naver_place", "blog"):
-        text = sample["channels"].get(key)
+        text = (sample.get("channels") or {}).get(key)
         if text:
             parts.append(f"{labels[key]}\n{text}")
     return "\n\n".join(parts)
