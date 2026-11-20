@@ -8,10 +8,10 @@
 
 ## 실행
 
-심사자는 제출한 소스 ZIP을 풀거나 아래 제출 브랜치를 받습니다. 기본 `main`에는 이 제출본의 새 기능이 아직 병합되지 않았습니다.
+심사자는 제출한 소스 ZIP을 풀거나 저장소를 받습니다.
 
 ```bash
-git clone --branch codex/customer-perception-20261120 --single-branch https://github.com/kschoi/geo-channel-auditor.git
+git clone https://github.com/kschoi/geo-channel-auditor.git
 cd geo-channel-auditor
 ```
 
@@ -52,6 +52,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
 | Search | `POST /tools/search/web` | 공개 매장·경쟁점 문서와 공식 상권 자료 후보 검색 |
 | Search Agent | `POST /agents/search` | 추가 출처 수집. 반환한 `references`만 근거로 채택 |
 | GPT Router | `POST /chat/completions` | 후기의 경험·감정·인용 추출, 상권 수치 후보 정리, 별도 가상 반응 실험 |
+| Images | `POST /images/generations` | 카드뉴스 AI 배경 이미지 생성 (`/source-audit`) |
 
 공통 주소는 `https://platform.liner.com/api/v1`이며, Router는 `model=liner-gpt-router`, `routing_strategy=balanced`를 사용합니다. 출처·인용 검증과 행동 제안 연결은 서버 코드가 담당합니다. 주민등록 인구는 행안부 CSV 스냅샷에서 읽으며 Liner가 생성한 숫자가 아닙니다.
 
