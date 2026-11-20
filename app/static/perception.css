@@ -344,7 +344,7 @@
  .p-population-search .p-button { padding-inline: 10px; font-size: 12px; }
  .p-population-square strong { font-size: 9px; }.p-population-heat { grid-template-columns: 23px repeat(6,minmax(0,1fr)); gap: 4px; }
  .p-scenario-grid { grid-template-columns: 25px repeat(5,minmax(0,1fr)); gap: 5px; }
- .p-scenario-cell { min-height: 86px; border-radius: 8px; gap: 5px; }.p-scenario-cell strong { font-size: 9px; }.p-scenario-cell small { font-size: 8px; }
+ .p-scenario-cell { min-height: 86px; border-radius: 8px; gap: 5px; padding: 8px 2px; }.p-scenario-cell strong { font-size: 9px; white-space: nowrap; letter-spacing: -.04em; }.p-scenario-cell small { font-size: 8px; }
  .p-simulation-stat { padding: 10px 8px; }.p-simulation-stat span { font-size: 10px; }.p-simulation-stat strong { font-size: 20px; }
  .p-persona-avatar { width: 50px; }.p-avatar-head { left:15px; }.p-avatar-body { left:3px; }
  .p-persona-response { padding: 17px; }.p-persona-reason { font-size: 13px; }
