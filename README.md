@@ -1,4 +1,4 @@
-# Geo Channel Auditor · 매장 인사이트
+# ClawClip 매장 인사이트 · Geo Channel Auditor
 
 > Liner .EXE-THON · 팀 클로클립 · 최경선
 
@@ -8,6 +8,15 @@
 
 ## 실행
 
+심사자는 제출한 소스 ZIP을 풀거나 아래 제출 브랜치를 받습니다. 기본 `main`에는 이 제출본의 새 기능이 아직 병합되지 않았습니다.
+
+```bash
+git clone --branch codex/customer-perception-20261120 --single-branch https://github.com/kschoi/geo-channel-auditor.git
+cd geo-channel-auditor
+```
+
+ZIP을 사용했다면 압축을 푼 프로젝트 폴더에서 바로 실행합니다. Python 3.10 이상과 [uv](https://docs.astral.sh/uv/)가 필요합니다.
+
 ```bash
 uv sync --frozen --extra dev
 cp .env.example .env
@@ -15,7 +24,7 @@ cp .env.example .env
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
-[로컬 앱](http://127.0.0.1:8765)에서 시작합니다. `.env`는 Git에서 제외합니다. 접힌 API 설정의 일회성 키도 사용할 수 있으며 브라우저에 저장하지 않습니다.
+[로컬 앱](http://127.0.0.1:8765)에서 시작합니다. 심사용 키를 `.env`의 `LINER_API_KEY` 값에 넣으면 됩니다. 추가 공공데이터 키는 필요하지 않습니다. `.env`는 Git과 제출 ZIP에서 제외합니다. 접힌 API 설정의 일회성 키도 사용할 수 있으며 브라우저에 저장하지 않습니다.
 
 ## 세 가지 자료를 함께 읽습니다
 
@@ -37,6 +46,14 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
 2. **Liner Router**가 인용문·항목·감정·글의 성격을 추출합니다.
 3. 서버가 출처·인용 일치·게시일·중복을 검사합니다. 후기와 홍보·기사·미확인 자료를 나눕니다.
 4. 확인할 불편과 살릴 강점을 원문 근거에 연결합니다. 가상 반응 실험은 사용자가 별도 버튼으로 시작합니다.
+
+| Liner API | 실제 호출 | 이 앱에서 하는 일 |
+| --- | --- | --- |
+| Search | `POST /tools/search/web` | 공개 매장·경쟁점 문서와 공식 상권 자료 후보 검색 |
+| Search Agent | `POST /agents/search` | 추가 출처 수집. 반환한 `references`만 근거로 채택 |
+| GPT Router | `POST /chat/completions` | 후기의 경험·감정·인용 추출, 상권 수치 후보 정리, 별도 가상 반응 실험 |
+
+공통 주소는 `https://platform.liner.com/api/v1`이며, Router는 `model=liner-gpt-router`, `routing_strategy=balanced`를 사용합니다. 출처·인용 검증과 행동 제안 연결은 서버 코드가 담당합니다. 주민등록 인구는 행안부 CSV 스냅샷에서 읽으며 Liner가 생성한 숫자가 아닙니다.
 
 매장당 Search 3회·Agent 1회, 공식 상권 검색 2회, 근거가 있으면 Router 최대 2회입니다. 가상 반응은 같은 분석 보고서에서 Router를 최대 1회 추가 호출합니다. 카드뉴스·이미지 생성은 별도 요청입니다. 상세 출처와 실제 호출 기록은 접힌 영역에서 확인합니다.
 
@@ -70,7 +87,10 @@ node tests/test_photo_editor.cjs
 
 390px 모바일에서 요약·인구·가상 실험, 표와 인물 선택을 확인했습니다. 페이지 폭도 390px로 가로 넘침이 없습니다.
 
-[5분 시연](docs/demo-script.md)은 실제 실행 화면으로 제작했습니다. 설정된 로컬 Chatterbox 여성 음성 37문장을 속도 변경 없이 사용했습니다. 1920×1080·30fps·300초 영상에 흰 자막 64개와 글자 너비의 검정 65% 배경을 얹었습니다. 검색·가상 반응의 대기만 줄였고, 음성 누락·반복 및 영상 디코딩 오류가 없는지 확인했습니다. 앱 자체에는 영상 생성·SNS 자동 발행 기능이 없습니다.
+[최종 시연 대본](docs/demo-script.md)은 실제 실행 화면에 맞춰 Liner API 활용 지점을 설명합니다. 검색 장면에서 Search·Search Agent, 경험 분류와 가상 반응 장면에서 GPT Router의 역할을 보여줍니다. 영상은 5분 이내이며, 검색·가상 반응의 대기 구간 일부만 단축했습니다. 앱 자체에는 영상 생성·SNS 자동 발행 기능이 없습니다.
+
+제출 기획서는 [2페이지 PDF](docs/Geo_Channel_Auditor_기획서.pdf)입니다. 대상 사용자의 문제, 에이전트의 처리 방식, 실제 Liner API 호출, 다른 조직·직무로의 확장 계획을 담았습니다. 공개 후기·지역 인구·합성 인물 반응을 구분하며, 업무 시간 절감과 매출 효과는 측정한 결과로 주장하지 않습니다.
+
 
 ## API
 
