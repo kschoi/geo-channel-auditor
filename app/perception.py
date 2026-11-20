@@ -15,6 +15,7 @@ from .evidence_review import _chunks, prepare_sources
 from .liner_client import LinerAPIError, LinerClient
 from .market_data import MARKET_SYSTEM_PROMPT, build_market, market_prompt
 from .perception_model import PERCEPTION_SYSTEM_PROMPT, build_perception, perception_prompt
+from .scenarios import remember_report
 
 KST = timezone(timedelta(hours=9))
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
@@ -27,7 +28,7 @@ class PerceptionRequest(BaseModel):
     industry: str = Field(default="", max_length=100)
     store_name: str = Field(default="", max_length=120)
     competitors: list[str] = Field(default_factory=list, max_length=2)
-    period_days: Literal[90, 180, 365] = 365
+    period_days: Literal[0, 90, 180, 365] = 0
     api_key: str | None = Field(default=None, max_length=1000, repr=False)
 
 
@@ -76,7 +77,8 @@ def _period_status(raw: str, period: dict[str, Any]) -> str:
         published = None
     if published is None:
         return "unknown"
-    return "in_period" if period["start"] <= published.isoformat() <= period["end"] else "out_of_period"
+    start = period.get("start") or date.min.isoformat()
+    return "in_period" if start <= published.isoformat() <= period["end"] else "out_of_period"
 
 
 def _prepare(raw: list[dict[str, Any]], store_id: str, period: dict[str, Any], agent: Any = None) -> list[dict[str, Any]]:
@@ -136,8 +138,13 @@ async def run_perception(payload: PerceptionRequest, emit: Emit | None = None) -
     if not client.live:
         raise LinerAPIError("공개 자료를 검색할 Liner API 키가 없어요. API 설정에서 키를 입력해 주세요.")
     today = datetime.now(KST).date()
-    period = {"days": payload.period_days, "start": (today - timedelta(days=payload.period_days - 1)).isoformat(),
-              "end": today.isoformat(), "label": f"최근 {payload.period_days}일"}
+    period = {
+        "days": payload.period_days,
+        "start": (today - timedelta(days=payload.period_days - 1)).isoformat() if payload.period_days else None,
+        "end": today.isoformat(),
+        "label": f"최근 {payload.period_days}일" if payload.period_days else "찾은 전체 기간",
+        "scope": "dated_period" if payload.period_days else "all_available",
+    }
     semaphore = asyncio.Semaphore(3)
     warnings: list[str] = []
     attempts: list[dict[str, Any]] = []
@@ -276,4 +283,6 @@ async def run_perception(payload: PerceptionRequest, emit: Emit | None = None) -
         card_context={"query": payload.query or f"{target.location} {target.store_name}"},
     )
     await progress("근거 확인을 마쳤어요. 고객 인식과 비교 결과를 정리했어요")
-    return client._redact(result)
+    public_result = client._redact(result)
+    public_result["scenario_token"] = remember_report(public_result)
+    return public_result

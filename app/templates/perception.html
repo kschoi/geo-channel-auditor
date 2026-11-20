@@ -26,7 +26,7 @@
     <section class="p-hero" aria-labelledby="perception-title">
       <span class="p-eyebrow">손님의 시선으로 보는 우리 가게</span>
       <h1 id="perception-title">고객은 우리 매장을<br />어떻게 볼까?</h1>
-      <p>공개 후기의 좋은 점과 아쉬운 점, 경쟁점과의 차이를 근거로 살펴봐요.</p>
+      <p>후기에서 손님의 기대를 읽고, 우리 동네에 맞는 다음 행동을 찾아요.</p>
     </section>
 
     <form id="perception-form" class="p-search-card" autocomplete="off">
@@ -48,7 +48,7 @@
         <div class="p-options-grid">
           <div class="p-field"><label for="perception-competitor-1">경쟁점 1</label><input id="perception-competitor-1" maxlength="300" placeholder="동네와 매장명을 함께 입력" /></div>
           <div class="p-field"><label for="perception-competitor-2">경쟁점 2</label><input id="perception-competitor-2" maxlength="300" placeholder="동네와 매장명을 함께 입력" /></div>
-          <div class="p-field"><label for="perception-period">게시일 기준</label><select id="perception-period"><option value="365">최근 1년</option><option value="180">최근 6개월</option><option value="90">최근 3개월</option></select></div>
+          <div class="p-field"><label for="perception-period">게시일 기준</label><select id="perception-period"><option value="0">찾은 전체 기간</option><option value="365">최근 1년</option><option value="180">최근 6개월</option><option value="90">최근 3개월</option></select></div>
         </div>
         <p class="p-note">같은 동네·비슷한 업종을 넣어주세요. 같은 기간과 검색 횟수로 비교해요.</p>
       </details>
@@ -79,6 +79,8 @@
     </section>
   </main>
   <footer class="p-footer p-shell"><p>공개 검색 자료를 분석해요. 전체 고객이나 모든 리뷰 사이트를 대표하지 않아요.</p><span>Geo Channel Auditor · Liner .EXE-THON</span></footer>
+  <script src="/static/population.js" defer></script>
+  <script src="/static/scenarios.js" defer></script>
   <script src="/static/perception.js" defer></script>
 </body>
 </html>

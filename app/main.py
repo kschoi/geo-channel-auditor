@@ -26,6 +26,8 @@ from .card_images import CardImageRequest, ImageJobError, get_card_image, shutdo
 from .card_studio import CardRequest, generate_cards
 from .liner_client import DEFAULT_MODEL, LinerAPIError, LinerClient
 from .perception import PerceptionRequest, run_perception
+from .population import router as population_router
+from .scenarios import router as scenarios_router
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -53,6 +55,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.include_router(population_router)
+app.include_router(scenarios_router)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 

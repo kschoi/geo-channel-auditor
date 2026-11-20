@@ -289,7 +289,9 @@ def test_competitor_complaints_do_not_create_target_actions():
     for item in observations:
         if item["store_id"] == "competitor-1":
             item["sentiment"] = "negative"
-    assert build(sources, observations, stores=stores)["decisions"] == []
+    decisions = build(sources, observations, stores=stores)["decisions"]
+    assert decisions and all(item["kind"] == "strength" for item in decisions)
+    assert all(item["store_id"] == "target" for item in decisions)
 
 
 def test_prompt_contains_only_owned_materials_not_out_of_period_data():
@@ -337,3 +339,83 @@ def test_prompt_reserves_equal_input_budget_for_every_store():
     totals = {store["id"]: sum(len(m["text"]) for s in payload["sources"] if s["store_id"] == store["id"] for m in s["materials"]) for store in stores}
     assert len(set(totals.values())) == 1
     assert 0 < totals["competitor-2"] <= 40000
+
+
+ALL_PERIOD = {"days": 0, "start": None, "end": "2026-11-20", "label": "찾은 전체 기간", "scope": "all_available"}
+
+
+def test_all_available_includes_undated_and_old_customer_documents_without_relabeling():
+    sources = [source(1, date=""), source(2, date="2020-02-01"), source(3, date="2027-01-01"),
+               source(4, date="2026-11-19"), source(5, date="", text=NEGATIVE)]
+    observations = [observation(1), observation(2), observation(3), observation(4, sentiment="neutral"),
+                    observation(5, quote=NEGATIVE, sentiment="negative", voice="owner_claim")]
+    result = build(sources, observations, period=ALL_PERIOD)
+    summary = result["stores"][0]["summary"]
+    assert summary["documents"] == 3
+    assert summary["dated_documents"] == 2
+    assert summary["undated_documents"] == 1
+    assert summary["positive"] == 2 and summary["neutral"] == 1
+    assert summary["positive_pct"] == 66.7
+    assert summary["evidence_scope"] == "all_available"
+    assert result["validation"] == {"accepted": 4, "rejected": 1}
+    assert result["stores"][0]["evidence"][0]["period_status"] == "unknown"
+    assert result["stores"][0]["evidence"][0]["date"] is None
+    assert all(cell["count"] is None for cell in result["stores"][0]["demographics"]["cells"])
+    bounded = build(sources, observations)
+    assert bounded["stores"][0]["summary"]["documents"] == 1
+    assert bounded["stores"][0]["summary"]["evidence_scope"] == "dated_period"
+
+
+def test_all_available_deduplicates_known_and_unknown_versions_in_denominators():
+    sources = [source(1, date=""), source(2, url="https://blog.naver.com/target/1?utm_source=test")]
+    for values in (sources, list(reversed(sources))):
+        result = build(values, [observation(1), observation(2)], period=ALL_PERIOD)
+        summary = result["stores"][0]["summary"]
+        assert summary["documents"] == summary["dated_documents"] == 1
+        assert summary["undated_documents"] == 0
+        assert aspect_of(result["stores"][0])["positive"] == 1
+        assert sum(row["documents"] for row in result["stores"][0]["channels"]) == 1
+
+
+def test_all_available_unknown_dates_limit_comparison_even_with_enough_documents():
+    stores, sources, observations = paired_samples(5)
+    sources[0]["date"] = ""
+    result = build(sources, observations, stores=stores, period=ALL_PERIOD)
+    assert result["stores"][0]["summary"]["documents"] == 5
+    assert result["comparison"]["status"] == "limited"
+    assert "게시일 미확인" in result["comparison"]["reason"]
+    assert not any(row["comparable"] for row in result["comparison"]["rows"])
+    assert next(row for row in result["comparison"]["rows"] if row["aspect"] == "service")["stores"][0]["positive"] == 5
+
+
+def test_all_available_unknown_complaint_creates_explicitly_undated_action():
+    result = build([source(text=NEGATIVE, date="")],
+                   [observation(quote=NEGATIVE, sentiment="negative")], period=ALL_PERIOD)
+    decision = result["decisions"][0]
+    assert decision["kind"] == "improve"
+    assert decision["priority"] == "P2"
+    assert decision["documents"] == 1
+    assert decision["includes_undated"] is True
+    assert decision["evidence_scope"] == "all_available"
+    assert decision["evidence_ids"] == [result["stores"][0]["evidence"][0]["id"]]
+    assert "기간 내" not in decision["reason"] and "최근" not in decision["reason"]
+
+
+def test_strength_uses_only_positive_documents_and_target_evidence():
+    combined = POSITIVE + " " + NEGATIVE
+    result = build([source(1), source(2, text=combined)],
+                   [observation(1), observation(2), observation(2, quote=NEGATIVE, sentiment="negative")])
+    improvement = next(item for item in result["decisions"] if item["kind"] == "improve")
+    strength = next(item for item in result["decisions"] if item["kind"] == "strength")
+    assert strength["documents"] == 1
+    assert strength["evidence_ids"] == ["E1"]
+    assert "긍정 문서가 1건" in strength["reason"]
+    assert improvement["evidence_ids"] == ["E3"]
+    assert "반복" not in strength["reason"]
+
+
+def test_all_available_requires_both_explicit_scope_and_zero_days():
+    with pytest.raises(ValueError):
+        build([source()], [observation()], period={"days": 0, "start": None, "end": "2026-11-20"})
+    with pytest.raises(ValueError):
+        build([source()], [observation()], period={**ALL_PERIOD, "days": 365})

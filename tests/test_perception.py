@@ -171,3 +171,17 @@ def test_json_route_disconnect_cancels_analysis(monkeypatch):
         await asyncio.wait_for(task, 1)
         assert canceled.is_set()
     asyncio.run(run())
+
+
+
+def test_request_defaults_to_all_available_and_bounded_windows_remain_selectable():
+    assert PerceptionRequest(query="산본 디델리").period_days == 0
+    for days in (0, 90, 180, 365):
+        assert PerceptionRequest(query="산본 디델리", period_days=days).period_days == days
+
+
+def test_all_available_preparation_preserves_unknown_and_excludes_future_dates():
+    period = {"days": 0, "scope": "all_available", "start": None, "end": "2026-11-20"}
+    assert _period_status("2020-01-01", period) == "in_period"
+    assert _period_status("", period) == "unknown"
+    assert _period_status("2027-01-01", period) == "out_of_period"

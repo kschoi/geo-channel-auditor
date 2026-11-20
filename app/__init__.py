@@ -1,3 +1,3 @@
 """Geo Channel Auditor — Liner .EXE-THON 제출 프로젝트."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

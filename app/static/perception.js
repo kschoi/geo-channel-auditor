@@ -104,7 +104,8 @@
 
   function summaryPanel(result, target) {
     const summary = target.summary || {};
-    const panel = section('확인한 후기에서 보이는 인식', '게시일이 분석 기간에 포함된 고객 경험 문서만 집계해요.', 'perception-overview');
+    const allPeriod = result.period?.scope === 'all_available';
+    const panel = section('손님들이 남긴 인상', allPeriod ? '찾은 전체 기간의 고객 경험이에요. 게시일이 없는 문서도 포함해요.' : '선택한 기간에 게시된 고객 경험이에요.', 'perception-overview');
     const content = el('div', 'p-summary');
     const left = el('div');
     const total = summary.documents;
@@ -114,9 +115,15 @@
       const positive = isCount(summary.positive) ? summary.positive : 0;
       headline = positive > negative ? '좋은 경험과 아쉬운 지점을 함께 봐요' : negative > positive ? '불편이 언급된 경험부터 살펴봐요' : '서로 다른 경험의 이유를 살펴봐요';
     }
-    append(left, badge('검색으로 확인한 문서 기준'), el('h3', '', headline), note('문서 한 건을 한 명의 고객으로 세지 않아요. 한 문서에 긍정과 부정이 함께 있으면 ‘혼합’으로 표시해요.'));
+    const strongest = list(target.aspects).filter(a => isCount(a.positive) && a.positive > 0).sort((a,b) => b.positive - a.positive)[0];
+    if (strongest) headline = `${strongest.label || ASPECTS[strongest.id]}에 좋은 경험이 있어요`;
+    append(left, badge('확인한 후기 · 중복 문서 제외'), el('h3', '', headline));
+    const highlight = list(target.evidence).find(e => e.voice === 'customer_experience' && e.sentiment === 'positive' && (allPeriod || e.period_status === 'in_period'));
+    if (highlight) append(left, el('blockquote', 'p-highlight-quote', highlight.quote), link('이 후기를 읽어보기 ↗', highlight.url));
+    else left.append(note('아래 근거를 읽고 손님이 기대하는 경험을 살펴보세요.'));
+    left.append(note('좋은 점과 아쉬운 점이 함께 나온 문서는 ‘혼합’으로 표시해요.'));
     const right = el('div');
-    append(right, el('span', 'p-eyebrow', '기간 내 고객 경험 문서'));
+    append(right, el('span', 'p-eyebrow', allPeriod ? '찾은 고객 경험 문서' : '기간 내 고객 경험 문서'));
     const number = el('div', 'p-summary-number', count(total));
     number.append(el('small', '', '건'));
     right.append(number);
@@ -143,9 +150,20 @@
     right.append(counts);
     append(content, left, right);
     panel.append(content);
+    if (isCount(total) && total > 0) {
+      let offset = 0;
+      const colors = {positive:'#4b8de7',negative:'#ae4f37',mixed:'#d9b96b',neutral:'#b6bfca'};
+      const stops = Object.keys(SENTIMENTS).map(id => { const begin = offset; offset += ratio(summary[id], total) || 0; return `${colors[id]} ${begin}% ${offset}%`; });
+      const donut = el('div', 'p-summary-donut');
+      donut.style.background = `conic-gradient(${stops.join(',')})`;
+      donut.setAttribute('role','img');
+      donut.setAttribute('aria-label', Object.entries(SENTIMENTS).map(([id,label])=>`${label} ${count(summary[id])}건`).join(', '));
+      append(donut, append(el('div'), el('strong','',count(total)), el('span','','후기 문서')));
+      left.append(donut);
+    }
     const foot = el('div', 'p-summary-foot');
     append(foot,
-      el('span', '', `날짜 미확인 고객 경험 ${count(summary.undated_documents)}건`),
+      el('span', '', `게시일 미확인 ${count(summary.undated_documents)}건${allPeriod ? ' 포함' : ' 별도'}`),
       el('span', '', `홍보·기사 등 ${count(summary.non_customer_documents)}건`),
       el('span', '', `감정 판단 못 함 ${count(summary.unclassified_documents)}건`));
     panel.append(foot);
@@ -156,7 +174,7 @@
     const stores = list(result.stores);
     const comparison = result.comparison || {};
     const panel = section(stores.length > 1 ? '어떤 경험에서 차이가 날까?' : '어떤 경험이 언급될까?', '사각형을 누르면 판단에 사용한 문장을 볼 수 있어요.', 'perception-comparison');
-    if (comparison.reason) panel.append(el('p', 'p-comparison-note', comparison.reason));
+    if (comparison.reason) panel.append(details('비교 범위 확인', note(comparison.reason)));
     const rows = list(comparison.rows).length ? list(comparison.rows) : list(stores[0]?.aspects).map(aspect => ({ aspect: aspect.id, label: aspect.label, stores: [{ store_id: stores[0].id, ...aspect }] }));
     if (!rows.length) {
       panel.append(empty('비교할 항목이 아직 없어요', '매장이 일치하는 공개 후기를 확보하면 품질, 서비스, 가격 등의 근거를 나눠 보여줘요.'));
@@ -184,7 +202,7 @@
         const cell = el('button', 'p-matrix-cell');
         cell.type = 'button';
         cell.setAttribute('aria-label', `${store.name}, ${row.label || row.aspect}, ${count(values.documents)}건 중 부정 ${count(values.negative)}건, ${percent(negative)}.${limited ? " 이 항목은 자료 수나 출처 구성 차이로 비교가 제한돼요." : ""} 근거 보기`);
-        cell.addEventListener('click', () => inspect({ store: store.id, aspect: row.aspect, voice: 'customer_experience', period: 'in_period' }));
+        cell.addEventListener('click', () => inspect({ store: store.id, aspect: row.aspect, voice: 'customer_experience', period: result.period?.scope === 'all_available' ? '' : 'in_period' }));
         const text = append(el('span'), el('span', 'p-matrix-value', negative === null ? '근거 없음' : `부정 ${percent(negative)}`), el('span', 'p-matrix-meta', `${count(values.documents)}건 · 긍정 ${count(values.positive)}`));
         append(cell, hatch(density(negative)), text);
         line.append(cell);
@@ -196,24 +214,27 @@
     const legend = el('div', 'p-legend');
     for (const [level, label] of [['0', '부정 0%'], ['1', '0% 초과~25%'], ['2', '25% 초과~50%'], ['3', '50% 초과~75%'], ['4', '75% 초과'], ['unknown', '근거 없음']]) legend.append(append(el('span'), hatch(level), el('span', '', label)));
     append(panel, legend, note('빗금이 촘촘할수록 부정 문서 비율이 높아요. 분모에는 긍정·부정·혼합·중립을 모두 포함해요. 항목 사이에는 같은 문서가 겹칠 수 있어요. 점선 행은 자료 수나 출처 구성 차이로 비교가 제한돼요.'));
-    panel.append(details('숫자로 비교하기', table(['항목', '매장', '문서', '긍정', '부정', '혼합', '중립', '부정 비율', '비교 범위'], numericRows, '기간 내 고객 경험 문서 · 건 / %')));
+    panel.append(details('숫자로 비교하기', table(['항목', '매장', '문서', '긍정', '부정', '혼합', '중립', '부정 비율', '비교 범위'], numericRows, result.period?.scope === 'all_available' ? '찾은 전체 기간의 고객 경험 문서 · 날짜 미확인 포함 · 건 / %' : '기간 내 고객 경험 문서 · 건 / %')));
     return panel;
   }
 
   function decisionsPanel(result, inspect) {
-    const panel = section('먼저 바꿀 일', '우리 매장의 근거에서 다음 행동을 골랐어요.', 'perception-decisions');
+    const panel = section('이번 주에 해볼 일', '칭찬은 더 잘 보이게, 불편은 먼저 점검해요.', 'perception-decisions');
     const decisions = list(result.decisions).filter(item => item.store_id === 'target');
     if (!decisions.length) {
       panel.append(empty('제안보다 근거 확인이 먼저예요', '구체적인 고객 경험이 확인되면 그 내용에 맞춰 개선할 일을 제안해요. 자료가 없다는 이유로 매장의 약점을 만들지는 않아요.'));
       return panel;
     }
     const items = el('div', 'p-decisions');
-    for (const [index, item] of decisions.entries()) {
+    const firstImprove = decisions.find(item => item.kind !== 'strength');
+    const firstStrength = decisions.find(item => item.kind === 'strength');
+    const displayed = [...new Set([firstImprove, firstStrength, ...decisions].filter(Boolean))].slice(0,3);
+    for (const item of displayed) {
       const article = el('article', 'p-decision');
       const button = el('button', 'p-text-button', `근거 ${list(item.evidence_ids).length}개 확인 →`);
       button.type = 'button';
       button.addEventListener('click', () => inspect({ ids: list(item.evidence_ids) }));
-      append(article, badge(`${String(index + 1).padStart(2, '0')} · ${ASPECTS[item.aspect] || '확인할 일'}`), el('h3', '', item.title), el('p', '', item.reason), el('p', 'p-action', item.action), button);
+      append(article, badge(`${item.kind === 'strength' ? '살릴 점' : '점검할 점'} · ${ASPECTS[item.aspect] || '확인할 일'}`, item.kind === 'strength' ? 'p-strength' : 'p-warning'), el('h3', '', item.title), el('p', '', item.reason), el('p', 'p-action', item.action), button);
       items.append(article);
     }
     panel.append(items);
@@ -321,7 +342,7 @@
         const article = el('article', 'p-evidence-item');
         const sentiment = Object.hasOwn(SENTIMENTS, item.sentiment) ? item.sentiment : 'neutral';
         const meta = append(el('div', 'p-evidence-meta'), badge(SENTIMENTS[sentiment], `p-sentiment-${sentiment}`), el('span', '', item.aspect_label || ASPECTS[item.aspect] || '항목 미확인'), el('span', '', item.store_name));
-        append(article, meta, el('blockquote', '', item.quote), link(item.title || '원문 보기', item.url), el('p', 'p-evidence-source', `${item.voice_label || '문서 성격 미확인'} · ${item.date || '날짜 미확인'} · ${item.period_status === 'in_period' ? '집계 기간 내' : '기간 집계에서 제외'}`));
+        append(article, meta, el('blockquote', '', item.quote), link(item.title || '원문 보기', item.url), el('p', 'p-evidence-source', `${item.voice_label || '문서 성격 미확인'} · ${item.date || '게시일 미확인'} · ${result.period?.scope === 'all_available' ? '전체 기간 보기' : item.period_status === 'in_period' ? '집계 기간 내' : '기간 집계에서 제외'}`));
         items.append(article);
       }
       more.hidden = filtered.length <= limit;
@@ -368,7 +389,7 @@
     if (!target) throw new Error('매장 분석 응답이 비어 있어요. 검색어를 확인하고 다시 시도해 주세요.');
     const fragment = document.createDocumentFragment();
     const heading = el('div', 'p-report-head');
-    append(heading, append(el('div'), el('span', 'p-eyebrow', '고객 인식 리포트'), el('h2', '', target.name), note(`${target.location || ''} · ${result.period?.start || '날짜 미확인'} — ${result.period?.end || '날짜 미확인'}`)), badge(result.comparison?.status === 'comparable' && !list(result.comparison?.rows).some(row => row.comparable === false) ? '같은 기준으로 비교' : stores.length > 1 ? '비교 범위 확인 필요' : '공개 자료 분석', stores.length > 1 && result.comparison?.status !== 'comparable' ? 'p-warning' : ''));
+    append(heading, append(el('div'), el('span', 'p-eyebrow', '고객 인식 리포트'), el('h2', '', target.name), note(`${target.location || ''} · ${result.period?.scope === 'all_available' ? '찾은 전체 기간 · 게시일 미확인 포함' : `${result.period?.start || '날짜 미확인'} — ${result.period?.end || '날짜 미확인'}`}`)), badge(result.comparison?.status === 'comparable' && !list(result.comparison?.rows).some(row => row.comparable === false) ? '같은 기준으로 비교' : stores.length > 1 ? '비교 범위 확인 필요' : '공개 자료 분석', stores.length > 1 && result.comparison?.status !== 'comparable' ? 'p-warning' : ''));
     const evidence = evidencePanel(result);
     const split = append(el('div', 'p-report-grid'), comparisonPanel(result, evidence.inspect), decisionsPanel(result, evidence.inspect));
     fragment.append(heading);
@@ -379,7 +400,13 @@
       if (list(result.warnings).length > 4) warning.append(note('나머지 내용은 아래 수집 범위와 분석 기준에서 확인할 수 있어요.'));
       fragment.append(warning);
     }
-    append(fragment, summaryPanel(result, target), split, demographicsPanel(target), marketPanel(result.market), evidence.panel, sourcesPanel(result));
+    append(fragment, summaryPanel(result, target), split, evidence.panel);
+    if (globalThis.PopulationView) fragment.append(globalThis.PopulationView.render(result));
+    if (globalThis.ScenarioView) fragment.append(globalThis.ScenarioView.render(result, evidence.inspect));
+    const scope = sourcesPanel(result);
+    scope.append(details('후기 작성자의 성별·연령을 알 수 있나요?', note(target.demographics?.reason || '공개 후기의 작성자 성별·연령은 확인되지 않았어요. 지역 인구와 가상 인물의 반응을 실제 고객 정보로 합치지 않아요.')));
+    if (list(result.market?.facts).length) scope.append(details('검색으로 추가 확인한 상권 자료', marketPanel(result.market)));
+    fragment.append(scope);
     const bridge = el('section', 'p-panel p-card-bridge');
     const next = el('a', 'p-button p-primary', '검색 정보 확인 · 카드뉴스 만들기 →');
     next.href = `/source-audit?query=${encodeURIComponent(result.input?.query || target.query || `${target.location || ''} ${target.name || ''}`)}`;
@@ -441,6 +468,7 @@
       canceled = false; timeout = false; history = [];
       busy(true);
       progress('매장과 지점을 확인하고 있어요');
+      byId('progress').scrollIntoView({behavior: 'auto', block: 'center'});
       byId('progress-detail').textContent = '공개 자료를 찾고, 매장과 게시일이 맞는 근거를 골라요.';
       const timer = setTimeout(() => { timeout = true; controller?.abort(); }, 420000);
       const slowTimer = setTimeout(() => { byId('progress-detail').textContent = '공개 검색 응답을 기다리고 있어요. 여러 매장을 비교하면 조금 더 걸릴 수 있어요.'; }, 20000);

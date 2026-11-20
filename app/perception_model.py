@@ -49,7 +49,8 @@ editorial(소개·기사·일반 평가), unclear(관점 불명확) 중 하나�
 타인의 평판을 요약한 문장, 검색 제목만 있는 자료는 customer_experience로 분류하지 않는다.
 자료에 주차·예약·영업시간이 있다는 사실만으로 긍정 경험을 만들지 않는다.
 검색 요약과 제공 발췌는 원문 일부일 뿐이다. 작성자 신원·실제 방문·리뷰 총수를 확인했다고 쓰지 않는다.
-period_status=unknown 문장은 날짜 미상으로만 남긴다. 과거 자료나 미래 게시일 자료는 추출하지 않는다.
+period_status=unknown 문장은 날짜 미상으로만 남긴다. out_of_period 자료는 추출하지 않는다.
+오래된 자료도 선택 범위 안이면 분류하되 최근 경험이라고 쓰지 않는다.
 자료가 부족하면 observations를 비워 둔다. 인구통계·순위·점수·추천 문구는 만들지 않는다.
 최대 240개 관찰을 JSON 객체 하나로 출력한다. 다른 설명이나 마크다운을 붙이지 않는다.
 {"observations":[{"store_id":"target","source_id":"target-S1","material_id":"summary",
@@ -247,21 +248,25 @@ def _extract(raw: Any, sources: dict[str, dict[str, Any]]) -> tuple[list[dict[st
 
 def _summarize_store(
     store: dict[str, Any], sources: dict[str, dict[str, Any]], evidence: list[dict[str, Any]],
+    *, all_available: bool = False,
 ) -> dict[str, Any]:
     own_sources = {key: source for key, source in sources.items() if source["store_id"] == store["id"]}
     document_keys = {key: source["_document"] for key, source in own_sources.items()}
     own = [item for item in evidence if item["store_id"] == store["id"]]
-    primary = [item for item in own if item["voice"] == "customer_experience" and item["period_status"] == "in_period"]
+    primary = [item for item in own if item["voice"] == "customer_experience"
+               and (all_available or item["period_status"] == "in_period")]
     customer_docs = {document_keys[item["source_id"]] for item in own if item["voice"] == "customer_experience"}
-    primary_docs = {document_keys[item["source_id"]] for item in primary}
+    dated_docs = {document_keys[item["source_id"]] for item in primary if item["period_status"] == "in_period"}
     undated_docs = {document_keys[item["source_id"]] for item in own
-                    if item["voice"] == "customer_experience" and item["period_status"] == "unknown"} - primary_docs
+                    if item["voice"] == "customer_experience" and item["period_status"] == "unknown"} - dated_docs
     non_customer_docs = {document_keys[item["source_id"]] for item in own
                          if item["voice"] != "customer_experience"} - customer_docs
     classified_docs = {document_keys[item["source_id"]] for item in own}
     eligible_docs = {source["_document"] for source in own_sources.values() if source["period_status"] != "out_of_period"}
     summary = {
         **_counts(primary, document_keys), "undated_documents": len(undated_docs),
+        "dated_documents": len(dated_docs),
+        "evidence_scope": "all_available" if all_available else "dated_period",
         "non_customer_documents": len(non_customer_docs),
         "unclassified_documents": len(eligible_docs - classified_docs),
     }
@@ -293,7 +298,7 @@ def _channel_coverage(
             documents: dict[str, set[str]] = defaultdict(set)
             for item in store["evidence"]:
                 if (item["aspect"] != aspect or item["voice"] != "customer_experience"
-                        or item["period_status"] != "in_period"):
+                        or (store["summary"]["evidence_scope"] != "all_available" and item["period_status"] != "in_period")):
                     continue
                 source = sources[item["source_id"]]
                 channel = source.get("channel")
@@ -318,6 +323,8 @@ def _comparison(stores: list[dict[str, Any]], sources: dict[str, dict[str, Any]]
         return {"status": "not_requested", "reason": "비교할 매장을 입력하면 같은 기간의 문서를 나란히 보여줘요.", "rows": []}
     enough = all(store["summary"]["documents"] >= MIN_COMPARISON_DOCUMENTS for store in stores)
     channels_match = _channel_coverage(stores, sources)
+    dates_known = all(store["summary"]["evidence_scope"] != "all_available"
+                      or store["summary"]["undated_documents"] == 0 for store in stores)
     locations = {re.sub(r"\s+", "", str(store.get("location") or "")) for store in stores}
     industries = {re.sub(r"\s+", "", str(store.get("industry") or "")) for store in stores}
     scope_matches = len(locations) == len(industries) == 1 and "" not in locations and "" not in industries
@@ -330,16 +337,18 @@ def _comparison(stores: list[dict[str, Any]], sources: dict[str, dict[str, Any]]
                 "documents", "positive", "negative", "mixed", "neutral", "negative_pct", "positive_pct",
             )}})
         rows.append({"aspect": aspect, "label": label, "stores": values,
-                     "comparable": enough and channels_match and scope_matches and _channel_coverage(stores, sources, aspect)
+                     "comparable": enough and channels_match and scope_matches and dates_known and _channel_coverage(stores, sources, aspect)
                      and all(value["documents"] >= MIN_COMPARISON_DOCUMENTS for value in values)})
     limitations = []
     if not enough:
-        limitations.append("기간 내 고객 경험 문서가 매장마다 5건 이상 모이지 않았어요")
+        limitations.append("선택 범위의 고객 경험 문서가 매장마다 5건 이상 모이지 않았어요")
     if not channels_match:
         limitations.append("고객 경험 문서의 출처 채널이나 구성 비율이 달라요")
+    if not dates_known:
+        limitations.append("게시일 미확인 문서가 있어 같은 시기의 경험인지 확인할 수 없어요")
     if not scope_matches:
         limitations.append("입력한 지역·업종이 같지 않아 같은 상권·업종인지 확인이 필요해요")
-    if not any(row["comparable"] for row in rows) and enough and channels_match and scope_matches:
+    if not any(row["comparable"] for row in rows) and enough and channels_match and scope_matches and dates_known:
         limitations.append("항목별 문서 수나 출처 채널 구성이 비교 조건을 충족하지 못했어요")
     if limitations:
         reason = ". ".join(limitations) + ". 숫자는 수집 문서의 설명값이며 매장 우열을 뜻하지 않아요."
@@ -360,34 +369,67 @@ _ACTIONS = {
 }
 
 
-def _decisions(stores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+_STRENGTHS = {
+    "quality": "칭찬받은 제품·메뉴가 잘 보이는 실제 사진을 고르고, 손님이 좋아한 특징을 소개에 담아봐요.",
+    "service": "칭찬받은 응대 장면을 직원들과 공유하고, 같은 안내를 이어갈 수 있도록 정리해요.",
+    "value": "손님이 만족한 구성과 가격을 메뉴 안내에서 한눈에 볼 수 있게 보여줘요.",
+    "ambience": "손님이 좋아한 공간과 좌석이 보이는 실제 사진으로 매장 소개를 보강해요.",
+    "access": "손님이 편리하다고 한 이용 방법을 찾아오는 길이나 예약 안내에 담아봐요.",
+    "wait": "손님이 좋게 평가한 주문·대기 안내를 살펴보고, 바쁜 시간에도 이어갈 방법을 정해요.",
+    "cleanliness": "칭찬받은 공간의 관리 방식을 살펴보고, 현재 상태를 꾸준히 점검해요.",
+}
+
+
+def _decisions(stores: list[dict[str, Any]], sources: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     target = next((store for store in stores if store["id"] == "target"), None)
     if target is None:
         return []
     decisions = []
+    all_available = target["summary"]["evidence_scope"] == "all_available"
+    scope_label = "찾은 고객 경험" if all_available else "기간 내 고객 경험"
     for aspect in target["aspects"]:
+        selected_ids = set(aspect["evidence_ids"])
+        selected = [item for item in target["evidence"] if item["id"] in selected_ids]
+        document_sentiments: dict[str, set[str]] = defaultdict(set)
+        for item in selected:
+            document_sentiments[sources[item["source_id"]]["_document"]].add(item["sentiment"])
+        positive_documents = {key for key, values in document_sentiments.items() if _collapse(values) == "positive"}
+        common = {"aspect": aspect["id"], "store_id": "target", "evidence_scope": target["summary"]["evidence_scope"]}
         negative_docs = aspect["negative"] + aspect["mixed"]
-        if not negative_docs:
-            continue
-        priority = ("P1" if aspect["documents"] >= 5 and negative_docs >= 3
-                    and negative_docs / aspect["documents"] >= 0.30 else "P2")
-        evidence = [item["id"] for item in target["evidence"]
-                    if item["aspect"] == aspect["id"] and item["voice"] == "customer_experience"
-                    and item["period_status"] == "in_period" and item["sentiment"] in {"negative", "mixed"}]
-        decisions.append({
-            "priority": priority, "aspect": aspect["id"], "title": f"{aspect['label']} 경험 확인하기",
-            "reason": (f"이 항목을 다룬 기간 내 고객 경험 문서 {aspect['documents']}건 중 "
-                       f"부정 {aspect['negative']}건, 긍정·부정이 함께 나온 문서 {aspect['mixed']}건이에요."),
-            "action": _ACTIONS[aspect["id"]], "evidence_ids": evidence, "store_id": "target",
-        })
-    return sorted(decisions, key=lambda item: (item["priority"], list(ASPECTS).index(item["aspect"])))
+        if negative_docs:
+            evidence = [item for item in selected if item["sentiment"] in {"negative", "mixed"}]
+            priority = ("P1" if aspect["documents"] >= 5 and negative_docs >= 3
+                        and negative_docs / aspect["documents"] >= 0.30 else "P2")
+            decisions.append({
+                **common, "kind": "improve", "priority": priority,
+                "title": f"{aspect['label']} 경험 확인하기",
+                "reason": (f"이 항목을 다룬 {scope_label} 문서 {aspect['documents']}건 중 "
+                           f"부정 {aspect['negative']}건, 긍정·부정이 함께 나온 문서 {aspect['mixed']}건이에요."),
+                "action": _ACTIONS[aspect["id"]], "evidence_ids": [item["id"] for item in evidence],
+                "includes_undated": any(item["period_status"] == "unknown" for item in evidence),
+                "documents": negative_docs,
+            })
+        if positive_documents:
+            evidence = [item for item in selected if item["sentiment"] == "positive"
+                        and sources[item["source_id"]]["_document"] in positive_documents]
+            decisions.append({
+                **common, "kind": "strength", "priority": "P2", "title": f"{aspect['label']}의 좋은 경험 살리기",
+                "reason": f"이 항목을 다룬 {scope_label} 문서 {aspect['documents']}건 중 긍정 문서가 {len(positive_documents)}건이에요.",
+                "action": _STRENGTHS[aspect["id"]], "evidence_ids": [item["id"] for item in evidence],
+                "includes_undated": any(item["period_status"] == "unknown" for item in evidence),
+                "documents": len(positive_documents),
+            })
+    return sorted(decisions, key=lambda item: (item["kind"] != "improve", item["priority"],
+                                               -item["documents"], list(ASPECTS).index(item["aspect"])))
 
 
 def build_perception(
     stores: list[dict[str, Any]], sources: list[dict[str, Any]], raw: Any, period: dict[str, Any],
 ) -> dict[str, Any]:
     """검증한 문서 수·비율·행동 후보를 만든다. 입력을 수정하거나 외부 API를 호출하지 않는다."""
-    start, end = _date(period.get("start")), _date(period.get("end"))
+    all_available = period.get("days") == 0 and period.get("scope") == "all_available"
+    start = date.min if all_available else _date(period.get("start"))
+    end = _date(period.get("end"))
     if start is None or end is None or start > end:
         raise ValueError("분석 기간을 확인해 주세요.")
     identities = [store.get("id") for store in stores]
@@ -396,19 +438,21 @@ def build_perception(
         raise ValueError("분석할 매장 구분을 확인해 주세요.")
     valid_sources = _validate_sources(stores, sources, start, end)
     evidence, rejected = _extract(raw, valid_sources)
-    results = [_summarize_store(store, valid_sources, evidence) for store in stores]
+    results = [_summarize_store(store, valid_sources, evidence, all_available=all_available) for store in stores]
     return {
-        "stores": results, "comparison": _comparison(results, valid_sources), "decisions": _decisions(results),
+        "stores": results, "comparison": _comparison(results, valid_sources), "decisions": _decisions(results, valid_sources),
         "validation": {"accepted": len(evidence), "rejected": rejected},
         "methodology": [
             "분석 단위는 공개 문서예요. 고객 수·방문자 수·전체 리뷰 수를 측정한 결과가 아니에요.",
             "원문 일부인 검색 요약·제공 발췌와 인용문이 일치하는지 확인해요. 페이지 전체를 읽은 결과는 아니에요.",
             "고객 경험·감정 분류는 AI 판단이며 작성자 신원과 실제 방문을 확인한 것은 아니에요.",
-            "주요 비율은 선택 기간에 게시된 고객 경험 문서만 사용해요. 날짜 미상·운영자 설명·기사는 분리해요.",
+            ("찾은 전체 기간에서는 게시일 미확인 고객 경험도 집계해요. 날짜 상태는 그대로 표시하며 최근 경험이라고 보지 않아요."
+             if all_available else "주요 비율은 선택 기간에 게시된 고객 경험 문서만 사용해요. 날짜 미상·운영자 설명·기사는 분리해요."),
             "같은 URL은 항목마다 한 문서로 세요. 전체 문서 수에서도 한 번만 세며, 상반된 평가는 복합으로 묶어요.",
             "긍정·부정 비율의 분모에는 복합·중립 문서도 포함해요. 자료가 없으면 0% 대신 미확인으로 표시해요.",
-            "비교는 매장·항목별 5문서 이상, 같은 입력 지역·업종·출처 채널, 채널 비중 차이 20%p 이내로 제한해요.",
+            "비교는 게시일이 확인된 매장·항목별 5문서 이상, 같은 입력 지역·업종·출처 채널, 채널 비중 차이 20%p 이내로 제한해요.",
             "P1은 해당 항목 5문서 이상 중 부정·복합이 3문서 이상이면서 30% 이상일 때예요. 그 외 근거 있는 조치는 P2예요.",
+            "강점 제안은 해당 항목에서 긍정으로 분류된 문서만 연결해요. 한 건의 칭찬을 반복된 평가로 확대하지 않아요.",
             "비교·우선순위 기준은 작업 순서를 정하는 규칙이에요. 통계적 유의성이나 고객 전체의 의견을 뜻하지 않아요.",
             "성별·연령은 문체·사진·닉네임으로 추정하지 않아요. 미확인은 0명과 달라요.",
         ],
