@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="공개 후기와 웹문서를 근거로 고객 인식과 경쟁점 차이를 살펴보고, 우리 매장에서 먼저 바꿀 일을 찾아보세요." />
+  <title>매장 인사이트 · 고객은 우리 매장을 어떻게 볼까?</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%233182F6'/%3E%3Ccircle cx='16' cy='16' r='6.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='1.8' fill='%23fff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/perception.css" />
+</head>
+<body class="perception-page">
+  <a class="p-skip" href="#perception-query">검색창으로 건너뛰기</a>
+  <header class="p-header">
+    <div class="p-shell p-header-inner">
+      <a class="p-brand" href="/" aria-label="매장 인사이트 처음으로">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="10" fill="currentColor"/><circle cx="16" cy="16" r="6.5" fill="none" stroke="white" stroke-width="2"/><circle cx="16" cy="16" r="1.8" fill="white"/></svg>
+        <span>매장 인사이트</span>
+      </a>
+      <a class="p-header-link" href="/source-audit">검색 정보 · 카드뉴스 <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+
+  <main class="p-shell p-main">
+    <section class="p-hero" aria-labelledby="perception-title">
+      <span class="p-eyebrow">손님의 시선으로 보는 우리 가게</span>
+      <h1 id="perception-title">고객은 우리 매장을<br />어떻게 볼까?</h1>
+      <p>공개 후기의 좋은 점과 아쉬운 점, 경쟁점과의 차이를 근거로 살펴봐요.</p>
+    </section>
+
+    <form id="perception-form" class="p-search-card" autocomplete="off">
+      <label class="sr-only" for="perception-query">동네, 업종, 실제 매장명</label>
+      <div class="p-search-row">
+        <div class="p-search-field">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <input id="perception-query" name="query" type="search" required maxlength="300" placeholder="예: 성수동 로우키 카페" enterkeyhint="search" />
+        </div>
+        <button type="submit" id="perception-run" class="p-button p-primary">고객 인식 살펴보기 <span aria-hidden="true">→</span></button>
+      </div>
+      <div class="p-chips" aria-label="실제 매장 검색 예시">
+        {% for sample in samples %}
+        <button type="button" class="p-chip" data-perception-query="{{ sample.query }}">{{ sample.label }}</button>
+        {% endfor %}
+      </div>
+      <details id="perception-options" class="p-search-options">
+        <summary>경쟁점 · 분석 기간 설정 <span class="p-summary-hint">선택</span></summary>
+        <div class="p-options-grid">
+          <div class="p-field"><label for="perception-competitor-1">경쟁점 1</label><input id="perception-competitor-1" maxlength="300" placeholder="동네와 매장명을 함께 입력" /></div>
+          <div class="p-field"><label for="perception-competitor-2">경쟁점 2</label><input id="perception-competitor-2" maxlength="300" placeholder="동네와 매장명을 함께 입력" /></div>
+          <div class="p-field"><label for="perception-period">게시일 기준</label><select id="perception-period"><option value="365">최근 1년</option><option value="180">최근 6개월</option><option value="90">최근 3개월</option></select></div>
+        </div>
+        <p class="p-note">같은 동네·비슷한 업종을 넣어주세요. 같은 기간과 검색 횟수로 비교해요.</p>
+      </details>
+      <details class="p-api-options">
+        <summary>API 설정 <span class="p-summary-hint">{{ '서버 키 연결됨' if mode == 'live' else '키 필요' }}</span></summary>
+        <div class="p-field"><label for="perception-api-key">Liner API 키</label><input id="perception-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="비워두면 서버 키를 사용해요" /></div>
+        <p class="p-note">이번 요청에만 사용해요. 브라우저에 저장하지 않아요.</p>
+      </details>
+    </form>
+
+    <section id="perception-progress" class="p-panel p-progress" hidden aria-live="polite" aria-atomic="true">
+      <div class="p-progress-head"><div><span class="p-eyebrow">공개 자료 확인 중</span><h2 id="perception-progress-title">매장과 지점을 확인하고 있어요</h2></div><button type="button" id="perception-cancel" class="p-button p-secondary">중단</button></div>
+      <p id="perception-progress-detail" class="p-note">검색 결과에서 해당 매장의 근거를 골라요.</p>
+      <div class="p-progress-track" aria-hidden="true"><span></span></div>
+      <ol id="perception-progress-steps" class="p-progress-steps"></ol>
+    </section>
+
+    <section id="perception-error" class="p-panel p-error" hidden role="alert">
+      <h2 id="perception-error-title">분석을 마치지 못했어요</h2>
+      <p id="perception-error-detail"></p>
+    </section>
+    <div id="perception-results" hidden tabindex="-1"></div>
+
+    <section id="perception-intro" class="p-intro" aria-label="확인할 수 있는 내용">
+      <article><span class="p-intro-number">01</span><h2>칭찬과 불편을 나눠요</h2><p>품질, 서비스, 가격 등<br />어떤 경험이 언급되는지 확인해요.</p></article>
+      <article><span class="p-intro-number">02</span><h2>경쟁점과 함께 봐요</h2><p>같은 기준으로 근거를 모으고<br />비교할 수 있는 범위를 알려줘요.</p></article>
+      <article><span class="p-intro-number">03</span><h2>먼저 바꿀 일을 찾아요</h2><p>판단의 근거를 직접 읽고<br />우리 매장의 다음 행동을 정해요.</p></article>
+    </section>
+  </main>
+  <footer class="p-footer p-shell"><p>공개 검색 자료를 분석해요. 전체 고객이나 모든 리뷰 사이트를 대표하지 않아요.</p><span>Geo Channel Auditor · Liner .EXE-THON</span></footer>
+  <script src="/static/perception.js" defer></script>
+</body>
+</html>

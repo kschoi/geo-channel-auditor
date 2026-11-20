@@ -363,7 +363,7 @@ def test_samples_endpoint(client):
 
 
 def test_index_page_renders(client):
-    response = client.get("/")
+    response = client.get("/source-audit")
     assert response.status_code == 200
     html = response.text
     assert "Geo Channel Auditor" in html

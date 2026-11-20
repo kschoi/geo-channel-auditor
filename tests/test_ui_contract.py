@@ -43,7 +43,7 @@ def _query_result(client) -> dict:
 
 
 def test_index_embeds_parsable_sample_json(client):
-    html = client.get("/").text
+    html = client.get("/source-audit").text
     match = re.search(
         r'<script id="samples-data" type="application/json">(.*?)</script>', html, re.DOTALL
     )
@@ -57,7 +57,7 @@ def test_index_embeds_parsable_sample_json(client):
 
 
 def test_index_loads_static_assets(client):
-    html = client.get("/").text
+    html = client.get("/source-audit").text
     assert "/static/app.js" in html
     assert "/static/styles.css" in html
     # Pretendard 웹폰트를 쓴다. (Tailwind CDN은 토스 톤 정리를 위해 걷어냈다.)
@@ -72,7 +72,7 @@ def test_index_loads_static_assets(client):
 # --------------------------------------------------------------------------- #
 
 def test_single_search_input_is_the_only_main_field(client):
-    html = client.get("/").text
+    html = client.get("/source-audit").text
 
     assert 'id="query"' in html
     query_tag = re.search(r'<input id="query"[^>]*>', html)
@@ -94,7 +94,7 @@ def test_single_search_input_is_the_only_main_field(client):
 
 
 def test_advanced_inputs_exist_but_are_hidden_by_toggle(client):
-    html = client.get("/").text
+    html = client.get("/source-audit").text
 
     # 기존 입력 id는 접힌 고급 영역에 그대로 남아 있다(접근성·계약 호환).
     for element_id in ("location", "industry", "store_name", "channel_text", "api_key"):
@@ -116,7 +116,7 @@ def test_advanced_inputs_exist_but_are_hidden_by_toggle(client):
 
 
 def test_first_screen_stays_text_light(client):
-    html = client.get("/").text
+    html = client.get("/source-audit").text
 
     # 히어로 문단·파이프라인 칩은 없애고 짧은 헤드라인만 남긴다.
     assert 'class="hero-flow"' not in html

@@ -837,4 +837,6 @@
   });
 
   syncChannelMeta();
+  const incomingQuery = new URLSearchParams(window.location.search).get('query');
+  if (incomingQuery && incomingQuery.length <= 300) els.query.value = incomingQuery;
 })();

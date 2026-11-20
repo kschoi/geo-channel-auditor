@@ -25,6 +25,7 @@ from .auditor import DIMENSION_LABELS, AuditInput, run_audit
 from .card_images import CardImageRequest, ImageJobError, get_card_image, shutdown_card_images, start_card_image
 from .card_studio import CardRequest, generate_cards
 from .liner_client import DEFAULT_MODEL, LinerAPIError, LinerClient
+from .perception import PerceptionRequest, run_perception
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -47,7 +48,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Geo Channel Auditor",
-    description="상권 Geo 분석 기반 외부 채널 결핍 진단 · 콘텐츠 처방 (Liner .EXE-THON)",
+    description="공개 후기·웹문서와 상권 자료로 살펴보는 고객 인식과 경쟁점 비교",
     version=__version__,
     lifespan=lifespan,
 )
@@ -94,7 +95,7 @@ class HealthResponse(BaseModel):
     base_url: str
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/source-audit", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     client = LinerClient()
     return templates.TemplateResponse(
@@ -252,3 +253,81 @@ async def audit_stream(payload: AuditRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/", response_class=HTMLResponse)
+async def perception_home(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request, name="perception.html",
+        context={"version": __version__, "key_configured": LinerClient().live, "mode": LinerClient().mode,
+                 "samples": [{"query": "산본 디델리 분식", "label": "산본 디델리"},
+                             {"query": "성수동 로우키 카페", "label": "성수 로우키"},
+                             {"query": "홍대 테이스티버거", "label": "홍대 테이스티버거"}]},
+    )
+
+
+@app.post("/api/perception")
+async def perception(payload: PerceptionRequest, request: Request) -> JSONResponse:
+    async def disconnected() -> None:
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.1)
+
+    task = asyncio.create_task(asyncio.wait_for(run_perception(payload), timeout=360))
+    watcher = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait({task, watcher}, return_when=asyncio.FIRST_COMPLETED)
+        if task not in done:
+            raise HTTPException(status_code=499, detail="연결이 끝나 분석을 중단했어요.")
+        result = task.result()
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except LinerAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="분석 시간이 길어져 중단했어요. 잠시 후 다시 시도해 주세요.") from None
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail="분석을 마치지 못했어요. 잠시 후 다시 시도해 주세요.") from None
+    finally:
+        for pending in (task, watcher):
+            if not pending.done():
+                pending.cancel()
+        await asyncio.gather(task, watcher, return_exceptions=True)
+
+
+@app.post("/api/perception/stream")
+async def perception_stream(payload: PerceptionRequest) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def emit(event: dict[str, Any]) -> None:
+            await queue.put(event)
+
+        task = asyncio.create_task(asyncio.wait_for(run_perception(payload, emit), timeout=360))
+        try:
+            yield _sse("open", {"message": "공개 자료 검색을 시작해요"})
+            while not task.done() or not queue.empty():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                yield _sse("step", event)
+            yield _sse("result", task.result())
+        except (ValueError, LinerAPIError) as exc:
+            yield _sse("error", {"detail": str(exc)})
+        except asyncio.TimeoutError:
+            yield _sse("error", {"detail": "분석 시간이 길어져 중단했어요. 잠시 후 다시 시도해 주세요."})
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            yield _sse("error", {"detail": "분석을 마치지 못했어요. 잠시 후 다시 시도해 주세요."})
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
